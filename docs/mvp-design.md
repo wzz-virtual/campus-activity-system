@@ -18,7 +18,7 @@
 | 端形态 | 先做 Web 端（响应式，兼顾手机浏览器） |
 | 发布权限 | 校级管理员可直接发布；社团发布的活动须经校级管理员审核 |
 | 统一身份认证 | 暂不对接（CAS / 企业微信 / 钉钉） |
-| 技术栈 | 无外部约束，由本文档推荐 |
+| 技术栈 | 无外部约束，由本文档按开发者背景推荐（见第 8 节） |
 
 ## 2. 角色与权限
 
@@ -103,6 +103,12 @@
 ## 5. 数据库设计
 
 数据库：MySQL 8，字符集 `utf8mb4`，时间统一以 **UTC** 存储。
+
+> **MVP 阶段实际先用 SQLite**，但表结构按 MySQL 8 的口径设计，迁移时注意两处差异：
+> 自增主键在 SQLite 下为 `INTEGER PRIMARY KEY`、在 MySQL 下为 `BIGINT AUTO_INCREMENT`（SQLAlchemy 中统一写成 `Integer/BigInteger` + `autoincrement=True` 即可兼容）；
+> `DATETIME` 类型由 SQLAlchemy 的 `DateTime` 负责映射，SQLite 侧无原生时间类型。
+> 用 SQLAlchemy 定义模型（而不是裸 SQL 建表）可以让这次切换几乎零成本——这也是选 ORM 而非手写 SQL 的主要理由之一。
+> 唯一索引、外键等约束两者语义一致，可以照常使用。
 
 ### 5.1 user — 用户
 
@@ -245,7 +251,11 @@ UPDATE activity
 
 ## 7. 接口设计（草案）
 
-统一前缀 `/api`，鉴权用 `Authorization: Bearer <token>`。
+> **实现说明（配合第 8 节的服务端渲染方案）**：路由分两类。
+> **页面路由**返回渲染好的 HTML（如 `GET /activities` 是列表页、`GET /activities/<id>` 是详情页）；
+> **动作路由**接收表单 POST，处理完成后重定向回页面，即 Post/Redirect/Get 模式。
+> 下表列出的动作路径可直接复用，页面路由在此基础上补充即可。
+> 鉴权使用 Flask 内置的签名 session（Cookie），比 JWT 简单且完全够用；等将来真正做前后端分离时再换成 token。
 
 ### 认证
 
@@ -293,21 +303,40 @@ UPDATE activity
 
 ## 8. 技术栈建议
 
-无外部约束，按"最短路径 + 资料充足"推荐：
+### 8.1 开发者技术背景（2026-09-17 确认）
 
-**推荐（Java 路线）**
+大二，目前只系统学过 C 语言，无 Web 开发经验。
 
-- 前端：Vue 3 + Vite + Element Plus + Pinia + Vue Router + Axios
-- 后端：Spring Boot 3 + MyBatis-Plus + Spring Security（JWT）+ MySQL 8
-- 测试：JUnit 5 + MockMvc，并发报名用 CountDownLatch 模拟
+因此选型的第一原则不是「主流」或「就业友好」，而是**同一时间只引入一个新变量**。跨度过大的技术栈会把时间耗在环境配置和框架概念上，而不是业务本身——这是学生项目最常见的失败原因。
 
-**备选（Node 路线，依赖更少，启动更快）**
+### 8.2 推荐方案：Python 全栈（服务端渲染）
 
-- 前端同上
-- 后端：NestJS + Prisma + MySQL 8
-- 测试：Jest + Supertest
+| 层次 | 技术 | 说明 |
+| --- | --- | --- |
+| 浏览器端 | HTML + CSS + Bootstrap | 无需构建步骤，不引入 npm |
+| Web 框架 | Flask + Jinja2 | 路由 + 服务端模板渲染 |
+| 数据访问 | SQLAlchemy ORM | 用 Python 对象读写数据库 |
+| 数据库 | SQLite | 单文件、零配置，后续可平滑切换 MySQL |
+| 测试 | pytest | 并发报名用 threading + barrier 模拟 |
 
-> 两条路线能力等价。若课程或比赛有指定语言，以指定为准。
+选择理由：
+
+1. **只新增一门语言**（Python），而不是 Java + JavaScript 两门同时上。
+2. **没有前端构建步骤**——不引入 npm、打包工具与 node_modules。
+3. **服务端渲染**：HTML 由服务器拼装后返回，因而完全不涉及前后端分离、接口联调、跨域这一类额外复杂度。
+4. SQLite 无需安装数据库服务，备份即复制文件。
+
+从 C 迁移到 Python 需要适应的只有四点：动态类型、缩进即语法、用 `dict` / `list` 代替 `struct` + 数组、不再需要手动管理内存。循环、条件、函数、数组等思维可直接复用。
+
+### 8.3 备选方案：Go + 标准库
+
+若开发者偏好 C 那样的静态类型与编译手感，可选 Go：`net/http` + `html/template` + `database/sql` + SQLite，同样没有前端构建步骤。代价是需新学的项数略多，模板写法也比 Jinja2 啰嗦。
+
+### 8.4 暂不建议：Java + Spring Boot + Vue
+
+需同时新学 Java 语法、Maven、Spring 注解体系、Spring Security、MyBatis-Plus、MySQL、Vue 3、Vite、npm 与 Axios、前端路由与状态管理，约 9 项互相耦合的新概念。作为第一版实现的风险过高，可在 MVP 交付后再作为进阶方向。
+
+> 若课程或比赛指定了技术栈，一律以指定为准，本节作废。
 
 ## 9. 开发里程碑
 
@@ -315,7 +344,7 @@ UPDATE activity
 
 | 里程碑 | 内容 | 交付判据 |
 | --- | --- | --- |
-| M0 | 前后端脚手架、数据库连接、登录鉴权打通 | 能用三种角色登录取到 token |
+| M0 | 项目脚手架（Flask 应用骨架、SQLAlchemy 模型、数据库初始化）、登录鉴权打通 | 能用三种角色登录取到 session |
 | M1 | 分类与活动 CRUD、活动列表 / 详情 | 管理员能建活动并在列表看到 |
 | M2 | 状态机 + 审核流 + 角色权限拦截 | 社团提交 → 管理员审核 → 学生可见 |
 | M3 | 报名与取消（含并发控制） | 并发压测下报名数不超过 capacity |
@@ -335,7 +364,7 @@ UPDATE activity
 
 ## 11. 待确认事项
 
-1. 技术栈选 Java 路线还是 Node 路线？
+1. 确认采用 **Python + Flask**（推荐）还是 **Go + 标准库**（备选）？
 2. 是否需要"忘记密码 / 邮箱验证"功能？
 3. 活动取消后，是否需要通知已报名学生？（当前列为 V1.1）
 4. 是否允许未报名的学生现场签到？（当前不支持，需拆表）
