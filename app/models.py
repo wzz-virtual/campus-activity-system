@@ -372,6 +372,7 @@ class AuditLog(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
     operator = db.relationship("User", foreign_keys=[operator_id])
+    activity = db.relationship("Activity", foreign_keys=[activity_id])
 
     def __repr__(self):
         return f"<AuditLog a={self.activity_id} {self.action}>"
