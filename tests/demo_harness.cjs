@@ -239,6 +239,7 @@ h = appHtml();
 check('报名后名额变为 13 人', h.includes('当前报名</dt><dd>13 人'));
 check('报名后标记「你已报名该活动」', h.includes('你已报名该活动'));
 check('报名后按钮变为取消报名', h.includes('取消报名'));
+check('未进入锁定期的活动给出可取消截止时间', h.includes('可取消至'));
 
 click('enroll', { 'data-id': 2 });
 check('重复报名不改变人数', appHtml().includes('当前报名</dt><dd>13 人'));
@@ -254,8 +255,8 @@ check(
   afterCancel ? '实际 ' + afterCancel[1] + ' 人' : '没找到报名人数字段'
 );
 
-/* ---------- 4. 报名拦截边界 ---------- */
-section('4. 学生：报名拦截边界');
+/* ---------- 4. 报名与取消的拦截边界 ---------- */
+section('4. 学生：报名与取消的拦截边界');
 click('detail', { 'data-id': 5 });
 check('名额已满时按钮禁用并说明原因', appHtml().includes('名额已满'));
 click('detail', { 'data-id': 8 });
@@ -264,6 +265,24 @@ click('detail', { 'data-id': 7 });
 check('活动进行中时关闭报名通道', appHtml().includes('活动已开始，报名通道已关闭'));
 click('detail', { 'data-id': 11 });
 check('活动已取消时不可报名', appHtml().includes('该活动已取消'));
+
+// 取消报名的锁定规则：距报名截止不足 24 小时起，名单锁定
+click('detail', { 'data-id': 4 });
+h = appHtml();
+check('锁定期的活动给出锁定说明', h.includes('距报名截止不足 24 小时，名单已锁定'));
+check('锁定期内不渲染取消按钮', !h.includes('data-act="unenroll"'));
+
+click('unenroll', { 'data-id': 4 });
+check('绕过按钮直接调用也会被拦下', appHtml().includes('你已报名该活动'));
+
+click('detail', { 'data-id': 1 });
+check('活动已开始时不可取消', appHtml().includes('活动已开始，无法取消报名'));
+
+click('nav', { 'data-page': 'my' });
+h = appHtml();
+check('我的报名页展示取消规则', h.includes('取消报名规则'));
+check('我的报名页对锁定记录不渲染取消按钮', !h.includes('data-act="unenroll"'));
+check('我的报名页逐条给出不可取消的原因', h.includes('距报名截止不足 24 小时，名单已锁定'));
 
 /* ---------- 5. 我的报名 ---------- */
 section('5. 学生：我的报名');

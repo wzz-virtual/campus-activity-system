@@ -418,7 +418,7 @@
       {
         id: 4, title: '人工智能前沿讲座', emoji: '🤖', categoryId: 3, organizerId: 99,
         description: '邀请计算机学院李教授主讲，主题为「大模型时代的软件工程」。\n讲座计入创新学分，需提前 15 分钟入场签到。',
-        startTime: iso(H(36)), endTime: iso(H(40)), enrollDeadline: iso(H(24)),
+        startTime: iso(H(36)), endTime: iso(H(40)), enrollDeadline: iso(H(20)),
         location: '计算机学院报告厅', capacity: 200, enrolledCount: 168,
         status: 'PUBLISHED', checkInCode: null, checkedInCount: 0,
         createdAt: iso(H(-150))
@@ -535,6 +535,7 @@
     ],
     myEnrollments: [
       { activityId: 1,  at: iso(H(-200)), checkInAt: null },
+      { activityId: 4,  at: iso(H(-150)), checkInAt: null },
       { activityId: 6,  at: iso(H(-300)), checkInAt: iso(H(-70)) },
       { activityId: 13, at: iso(H(-420)), checkInAt: null }
     ]
@@ -552,11 +553,10 @@
   const isMineAct = (a) => state.user && a.organizerId === state.user.id;
   const myEnroll = (id) => state.myEnrollments.find((m) => m.activityId === id);
 
-  function isEnrollable(a) {
-    return a.status === 'PUBLISHED' &&
-           Date.now() < new Date(a.enrollDeadline).getTime() &&
-           a.enrolledCount < a.capacity;
-  }
+  /* 取消报名策略：距报名截止不足这个小时数起，名单锁定，不可再取消。
+     理由：组织者要提前按名单备料、排座位，临门撤人会直接影响活动执行。 */
+  const CANCEL_LOCK_HOURS = 24;
+
   function enrollBlockReason(a) {
     if (a.status === 'DRAFT' || a.status === 'PENDING' || a.status === 'REJECTED') return '该活动尚未发布';
     if (a.status === 'CANCELED') return '该活动已取消';
@@ -564,6 +564,24 @@
     if (a.status === 'ONGOING') return '活动已开始，报名通道已关闭';
     if (Date.now() >= new Date(a.enrollDeadline).getTime()) return '报名已截止';
     if (a.enrolledCount >= a.capacity) return '名额已满';
+    return '';
+  }
+
+  /** 距离「名单锁定」还有多少毫秒；已锁定则返回 0 或负数。 */
+  function msUntilCancelLock(a) {
+    return new Date(a.enrollDeadline).getTime() - CANCEL_LOCK_HOURS * 3600000 - Date.now();
+  }
+
+  /** 已报名的活动能否取消；返回空串表示可以取消。 */
+  function cancelBlockReason(a) {
+    if (a.status === 'CANCELED') return '活动已取消';
+    if (a.status === 'FINISHED') return '活动已结束';
+    if (a.status === 'ONGOING') return '活动已开始，无法取消报名';
+    if (a.status !== 'PUBLISHED') return '当前状态不可取消报名';
+    if (Date.now() >= new Date(a.enrollDeadline).getTime()) return '报名已截止，名单已锁定';
+    if (msUntilCancelLock(a) <= 0) {
+      return '距报名截止不足 ' + CANCEL_LOCK_HOURS + ' 小时，名单已锁定';
+    }
     return '';
   }
 
@@ -973,15 +991,22 @@
 
     let actionArea = '';
     if (mine) {
+      const cancelBlock = cancelBlockReason(a);
+      const canCancel = !cancelBlock;
+      const lockAt = new Date(new Date(a.enrollDeadline).getTime() - CANCEL_LOCK_HOURS * 3600000);
       actionArea =
         '<div class="badge st-ongoing" style="margin-bottom:10px">✅ 你已报名该活动</div>' +
         '<div class="small muted" style="margin-bottom:12px">报名时间：' + fmt(mine.at) + '</div>' +
         (mine.checkInAt
           ? '<div class="callout" style="margin-bottom:12px">已签到：' + fmt(mine.checkInAt) + '</div>'
           : '<div class="callout warn" style="margin-bottom:12px">尚未签到。活动开始后由组织者核验。</div>') +
-        (a.status === 'PUBLISHED'
-          ? '<button class="btn danger" style="width:100%" data-act="unenroll" data-id="' + a.id + '">取消报名</button>'
-          : '<button class="btn" style="width:100%" disabled>活动已开始，无法取消</button>');
+        (canCancel
+          ? '<button class="btn danger" style="width:100%" data-act="unenroll" data-id="' + a.id + '">取消报名</button>' +
+            '<div class="hint" style="margin-top:10px;text-align:center">' +
+              '可取消至 ' + fmtShort(iso(lockAt)) + '（名单锁定后不可撤）</div>'
+          : '<button class="btn" style="width:100%" disabled>' + esc(cancelBlock) + '</button>' +
+            '<div class="hint" style="margin-top:10px;text-align:center">' +
+              (a.status === 'PUBLISHED' ? '报名截止前 ' + CANCEL_LOCK_HOURS + ' 小时起，名单即锁定' : '') + '</div>');
     } else if (reason) {
       actionArea =
         '<button class="btn primary" style="width:100%" disabled>' + esc(reason) + '</button>' +
@@ -1078,25 +1103,30 @@
       '<table class="tb">' +
         '<thead><tr><th>活动</th><th>时间</th><th>地点</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>' +
         '<tbody>' +
-        list.map((x) =>
-          '<tr>' +
+        list.map((x) => {
+          const cancelBlock = cancelBlockReason(x.a);
+          return '<tr>' +
             '<td><b>' + x.a.emoji + ' ' + esc(x.a.title) + '</b><div class="small faint">' + esc(orgName(x.a.organizerId)) + '</div></td>' +
             '<td class="muted small">' + fmtShort(x.a.startTime) + '</td>' +
             '<td class="muted small">' + esc(x.a.location) + '</td>' +
             '<td>' + enrollStateText(x.a, x.m) + '</td>' +
             '<td style="text-align:right">' +
               '<button class="btn sm" data-act="detail" data-id="' + x.a.id + '">查看</button> ' +
-              (x.a.status === 'PUBLISHED'
-                ? '<button class="btn sm danger" data-act="unenroll" data-id="' + x.a.id + '">取消报名</button>'
-                : '') +
+              (cancelBlock
+                ? '<span class="small faint">' + esc(cancelBlock) + '</span>'
+                : '<button class="btn sm danger" data-act="unenroll" data-id="' + x.a.id + '">取消报名</button>') +
             '</td>' +
-          '</tr>'
-        ).join('') +
+          '</tr>';
+        }).join('') +
         '</tbody>' +
       '</table>' +
     '</div>' +
     '<div class="callout" style="margin-top:16px">' +
       '「缺席」= 活动已结束但没有签到记录。统计签到率时，这类记录会计入报名总数但不计入实到人数。' +
+    '</div>' +
+    '<div class="callout warn" style="margin-top:10px">' +
+      '<b>取消报名规则：</b>报名截止前 ' + CANCEL_LOCK_HOURS + ' 小时起，名单即锁定，不可再取消；' +
+      '活动开始后同样不可取消。这是为了让组织者能按稳定名单备料。' +
     '</div>';
   }
 
@@ -1694,11 +1724,13 @@
     unenroll: function (el) {
       const id = Number(el.getAttribute('data-id'));
       const a = getAct(id);
+      const block = cancelBlockReason(a);
+      if (block) { toast(block, 'err'); return; }
       const idx = state.myEnrollments.findIndex((m) => m.activityId === id);
       if (idx === -1) return;
       openModal({
         title: '确认取消报名？',
-        text: '「' + a.title + '」的名额将立即释放给其他同学。若在报名截止前，你还可以重新报名。',
+        text: '「' + a.title + '」的名额将立即释放给其他同学。你仍可以在名单锁定前重新报名。',
         okText: '确认取消报名',
         danger: true,
         onOk: function () {

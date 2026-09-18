@@ -33,7 +33,7 @@ REQUIRED_SECTIONS = [
     "登录页",
     "学生：登录与活动广场",
     "学生：报名与名额变化",
-    "学生：报名拦截边界",
+    "学生：报名与取消的拦截边界",
     "学生：我的报名",
     "社团：提交草稿审核",
     "社团：新建活动与表单校验",
@@ -43,7 +43,7 @@ REQUIRED_SECTIONS = [
     "社团：数据统计",
 ]
 
-MIN_CHECKS = 60
+MIN_CHECKS = 70
 
 
 @pytest.fixture(scope="module")
