@@ -1,0 +1,49 @@
+{# 活动状态徽章与几个共用小片段。放在一处，避免各页面配色与措辞不一致。 #}
+
+{% set STATUS_LABELS = {
+  'DRAFT': '草稿',
+  'PENDING': '待审核',
+  'REJECTED': '已驳回',
+  'PUBLISHED': '已发布',
+  'ONGOING': '进行中',
+  'FINISHED': '已结束',
+  'CANCELED': '已取消',
+} %}
+
+{% set STATUS_STYLES = {
+  'DRAFT': 'text-bg-secondary',
+  'PENDING': 'text-bg-warning',
+  'REJECTED': 'text-bg-danger',
+  'PUBLISHED': 'text-bg-success',
+  'ONGOING': 'text-bg-primary',
+  'FINISHED': 'text-bg-dark',
+  'CANCELED': 'text-bg-secondary',
+} %}
+
+{% macro status_badge(activity) -%}
+  <span class="badge {{ STATUS_STYLES.get(activity.status, 'text-bg-secondary') }}">
+    {{ activity.status_label }}
+  </span>
+{%- endmacro %}
+
+{% macro quota_text(activity) -%}
+  {% if activity.is_full %}
+    <span class="text-danger">名额已满</span>
+  {% else %}
+    剩余 <strong>{{ activity.remaining }}</strong> / {{ activity.capacity }} 个名额
+  {% endif %}
+{%- endmacro %}
+
+{% macro enroll_closed_note(activity, now) -%}
+  {% if activity.status == 'CANCELED' %}
+    <span class="text-secondary">该活动已取消</span>
+  {% elif activity.status == 'FINISHED' %}
+    <span class="text-secondary">该活动已结束</span>
+  {% elif activity.status == 'ONGOING' %}
+    <span class="text-secondary">活动已开始，报名通道已关闭</span>
+  {% elif now and now >= activity.enroll_deadline %}
+    <span class="text-secondary">报名已截止（{{ activity.enroll_deadline|localtime }}）</span>
+  {% elif activity.status != 'PUBLISHED' %}
+    <span class="text-secondary">该活动尚未发布</span>
+  {% endif %}
+{%- endmacro %}

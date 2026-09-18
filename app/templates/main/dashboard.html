@@ -28,18 +28,102 @@
 </div>
 
 {% if current_user.is_student %}
-  <div class="alert alert-info mb-0">
-    学生可以浏览活动、报名、签到，并查看自己报名的活动。
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">找活动、报名</h2>
+          <p class="text-secondary small mb-3">浏览、筛选、搜索活动，报名后名额立刻变化。</p>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('activities.list_activities') }}">活动广场</a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">我的报名</h2>
+          <p class="text-secondary small mb-3">
+            查看签到状态与取消规则。共 {{ my_enrollments|length }} 条有效报名。
+          </p>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.my_enrollments') }}">查看</a>
+        </div>
+      </div>
+    </div>
+
+    {% if my_enrollments %}
+      <div class="col-12">
+        <div class="card">
+          <div class="card-body">
+            <h2 class="h6 mb-3">最近的报名</h2>
+            <ul class="list-unstyled mb-0">
+              {% for enrollment in my_enrollments %}
+                <li class="d-flex justify-content-between align-items-center border-bottom py-2">
+                  <a class="link-dark text-decoration-none"
+                     href="{{ url_for('activities.activity_detail', activity_id=enrollment.activity.id) }}">
+                    {{ enrollment.activity.title }}
+                  </a>
+                  <span class="small text-secondary">
+                    {{ enrollment.activity.start_time|localtime('%Y-%m-%d %H:%M') }}
+                  </span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+    {% endif %}
   </div>
+
 {% elif current_user.is_club %}
-  <div class="alert alert-info mb-0">
-    社团可以创建活动并提交审核，在活动发布后管理报名名单与签到。
-    前往 <a href="{{ url_for('main.club_home') }}" class="alert-link">社团工作台</a>。
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">社团工作台</h2>
+          <p class="text-secondary small mb-3">
+            查看你创建的全部活动、各状态数量和整体签到情况。
+          </p>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('main.club_home') }}">进入</a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">发布活动</h2>
+          <p class="text-secondary small mb-3">
+            社团创建的活动会进入<b>待审核</b>队列，管理员通过后才会出现在活动广场。
+          </p>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.new_activity') }}">新建</a>
+        </div>
+      </div>
+    </div>
   </div>
+
 {% elif current_user.is_admin %}
-  <div class="alert alert-info mb-0">
-    管理员可以直接发布活动，并审核社团提交的活动。
-    前往 <a href="{{ url_for('admin.home') }}" class="alert-link">管理后台</a>。
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">审核中心</h2>
+          <p class="text-secondary small mb-3">
+            待审核活动 {{ pending_count }} 场。管理员创建的活动跳过审核、直接发布。
+          </p>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('admin.audit_center') }}">
+            进入处理{% if pending_count %} <span class="badge text-bg-light">{{ pending_count }}</span>{% endif %}
+          </a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">管理后台</h2>
+          <p class="text-secondary small mb-3">全部活动、分类维护、用户与角色、密码找回。</p>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.home') }}">进入</a>
+        </div>
+      </div>
+    </div>
   </div>
 {% endif %}
 {% endblock %}

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
+
+{% block title %}全部活动 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">全部活动</h1>
+<p class="text-secondary small mb-4">按状态筛选，必要时强制取消。</p>
+
+<form class="card mb-3" method="get" action="{{ url_for('admin.all_activities') }}">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-sm-5">
+        <label class="form-label small" for="f-keyword">标题关键词</label>
+        <input class="form-control form-control-sm" id="f-keyword" name="keyword" value="{{ keyword }}">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small" for="f-status">状态</label>
+        <select class="form-select form-select-sm" id="f-status" name="status">
+          <option value="">全部状态</option>
+          {% for value in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'] %}
+            <option value="{{ value }}" {{ 'selected' if current_status == value }}>
+              {{ m.STATUS_LABELS.get(value, value) }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-3 d-flex gap-2">
+        <button class="btn btn-sm btn-primary flex-fill" type="submit">筛选</button>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.all_activities') }}">重置</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive-sm">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>活动</th>
+          <th style="width:100px">状态</th>
+          <th style="width:150px">组织者</th>
+          <th style="width:170px">时间</th>
+          <th style="width:90px" class="text-end">报名</th>
+          <th style="width:200px" class="text-end">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for activity in activities %}
+        <tr>
+          <td>
+            <a class="link-dark text-decoration-none"
+               href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
+              {{ activity.title }}
+            </a>
+            <div class="small text-secondary">{{ activity.location }}</div>
+          </td>
+          <td>{{ m.status_badge(activity) }}</td>
+          <td class="small">
+            {{ activity.organizer.name }}
+            {% if activity.organizer.club_name %}
+              <div class="text-secondary">{{ activity.organizer.club_name }}</div>
+            {% endif %}
+          </td>
+          <td class="small">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</td>
+          <td class="text-end small">{{ activity.enrolled_count }} / {{ activity.capacity }}</td>
+          <td class="text-end">
+            <div class="d-inline-flex gap-1">
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单</a>
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">统计</a>
+              {% if activity.status in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING'] %}
+                <form method="post"
+                      action="{{ url_for('activities.cancel_activity', activity_id=activity.id) }}"
+                      onsubmit="return confirm('强制取消「{{ activity.title }}」？已报名的记录会保留。');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">强制取消</button>
+                </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-center text-secondary py-4">没有符合条件的活动。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if pagination.pages and pagination.pages > 1 %}
+  <nav class="mt-3">
+    <ul class="pagination pagination-sm justify-content-center mb-0">
+      <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
+        <a class="page-link" href="{{ url_for('admin.all_activities', page=pagination.prev_num, status=current_status, keyword=keyword) }}">上一页</a>
+      </li>
+      <li class="page-item disabled"><span class="page-link">{{ pagination.page }} / {{ pagination.pages }}</span></li>
+      <li class="page-item {{ 'disabled' if not pagination.has_next }}">
+        <a class="page-link" href="{{ url_for('admin.all_activities', page=pagination.next_num, status=current_status, keyword=keyword) }}">下一页</a>
+      </li>
+    </ul>
+  </nav>
+{% endif %}
+{% endblock %}

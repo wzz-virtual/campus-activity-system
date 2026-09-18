@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}暂无活动 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body text-center py-5">
+    <div class="fs-3 mb-2">📌</div>
+    <p class="text-secondary mb-3">你还没有创建过活动，这里暂时没有可处理的内容。</p>
+    <a class="btn btn-sm btn-primary" href="{{ url_for('activities.new_activity') }}">发布一个活动</a>
+  </div>
+</div>
+{% endblock %}

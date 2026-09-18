@@ -1,32 +1,81 @@
 {% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
 
 {% block title %}社团工作台 · 校园活动管理系统{% endblock %}
 
 {% block content %}
 <h1 class="h4 mb-1">社团工作台</h1>
 <p class="text-secondary small mb-4">
-  你以 <strong>{{ current_user.name }}</strong>（{{ current_user.role_label }}）身份登录。
-  此页面只有社团角色可以访问。
+  {{ current_user.club_name or current_user.name }} · 共 {{ overview.activity_count }} 场活动
+  　·　累计报名 <strong>{{ overview.enrolled }}</strong> 人
+  　·　累计到场 <strong>{{ overview.checked_in }}</strong> 人
+  　·　整体签到率 <strong>{{ overview.check_in_rate }}%</strong>
 </p>
 
-<div class="card shadow-sm">
+<div class="card mb-3">
   <div class="card-body">
-    <h2 class="h6">我的活动</h2>
-    <p class="text-secondary small mb-0">
-      活动创建、提交审核在 M1 里程碑实现。社团发布的活动必须先提交校级管理员审核，
-      通过后才会出现在活动广场。
-    </p>
+    <h2 class="h6 mb-3">各状态数量</h2>
+    <div class="d-flex flex-wrap gap-2">
+      {% for code, label in status_labels.items() %}
+        <span class="badge text-bg-light border py-2 px-3">
+          {{ label }} <span class="fw-bold">{{ counts[code] }}</span>
+        </span>
+      {% endfor %}
+    </div>
   </div>
 </div>
 
-<div class="card shadow-sm mt-3">
+<div class="card">
   <div class="card-body">
-    <h2 class="h6">权限自检</h2>
-    <p class="text-secondary small mb-0">
-      如果页面能正常显示到这里，说明服务端已经确认你的角色是 <code>CLUB</code>。
-      注意：归属权校验（只能改自己创建的活动）是比角色校验更细的一层，
-      在 M1 引入活动实体后由 <code>owner_required</code> 负责。
-    </p>
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <h2 class="h6 mb-0">我的活动</h2>
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-primary" href="{{ url_for('activities.new_activity') }}">发布活动</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.club_stats') }}">数据统计</a>
+      </div>
+    </div>
+
+    {% if not activities %}
+      <p class="text-secondary mb-0">
+        你还没有创建过活动。<a href="{{ url_for('activities.new_activity') }}">现在发布一个</a>。
+      </p>
+    {% else %}
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>活动</th>
+              <th style="width:110px">状态</th>
+              <th style="width:150px">时间</th>
+              <th style="width:100px" class="text-end">报名</th>
+              <th style="width:140px" class="text-end">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for activity in activities %}
+            <tr>
+              <td>
+                <a class="link-dark text-decoration-none"
+                   href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
+                  {{ activity.title }}
+                </a>
+                {% if activity.status == 'REJECTED' and activity.reject_reason %}
+                  <div class="small text-danger">驳回原因：{{ activity.reject_reason }}</div>
+                {% endif %}
+              </td>
+              <td>{{ m.status_badge(activity) }}</td>
+              <td class="small">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</td>
+              <td class="text-end small">{{ activity.enrolled_count }} / {{ activity.capacity }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-secondary"
+                   href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单</a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

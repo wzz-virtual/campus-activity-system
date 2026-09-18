@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}用户管理 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">用户管理</h1>
+<p class="text-secondary small mb-4">
+  系统<b>不提供自助注册</b>：校园场景下开放注册等于任何人都能给自己开一个号。
+  账号一律在管理员这里创建后发放。
+</p>
+
+<form class="card mb-3" method="get" action="{{ url_for('admin.users') }}">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-sm-6">
+        <label class="form-label small" for="f-keyword">按学号 / 工号或姓名搜索</label>
+        <input class="form-control form-control-sm" id="f-keyword" name="keyword" value="{{ keyword }}">
+      </div>
+      <div class="col-sm-3 d-flex gap-2">
+        <button class="btn btn-sm btn-primary flex-fill" type="submit">搜索</button>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.users') }}">重置</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="card mb-3">
+  <div class="table-responsive-sm">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th style="width:130px">学号 / 工号</th>
+          <th style="width:150px">姓名</th>
+          <th style="width:140px">角色</th>
+          <th style="width:150px">所属社团</th>
+          <th style="width:90px">状态</th>
+          <th style="width:230px" class="text-end">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for user in users %}
+        <tr>
+          <td>
+            {{ user.student_no }}
+            {% if user.id == current_user.id %}<span class="badge text-bg-light border">我</span>{% endif %}
+          </td>
+          <td>{{ user.name }}</td>
+          <td>
+            <select class="form-select form-select-sm" form="user-{{ user.id }}" name="role">
+              {% for code, label in role_labels.items() %}
+                <option value="{{ code }}" {{ 'selected' if user.role == code }}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <input class="form-control form-control-sm" form="user-{{ user.id }}"
+                   name="club_name" value="{{ user.club_name or '' }}" placeholder="仅社团角色">
+          </td>
+          <td>
+            <select class="form-select form-select-sm" form="user-{{ user.id }}" name="status">
+              <option value="1" {{ 'selected' if user.status == 1 }}>正常</option>
+              <option value="0" {{ 'selected' if user.status == 0 }}>已停用</option>
+            </select>
+          </td>
+          <td class="text-end">
+            <div class="d-inline-flex gap-1">
+              <button class="btn btn-sm btn-outline-secondary" type="submit" form="user-{{ user.id }}">保存</button>
+              <form method="post" action="{{ url_for('admin.reset_user_password', user_id=user.id) }}"
+                    onsubmit="return confirm('把 {{ user.name }} 的密码重置为随机临时密码？他登录后会被要求立即修改。');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-outline-danger" type="submit">重置密码</button>
+              </form>
+            </div>
+            <form id="user-{{ user.id }}" method="post"
+                  action="{{ url_for('admin.update_user', user_id=user.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-center text-secondary py-4">没有找到匹配的账号。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h2 class="h6 mb-3">新建账号</h2>
+    <p class="text-secondary small">
+      停用账号后该用户无法登录，但历史报名与签到记录会保留——统计口径不会因为
+      有人离校就变样。
+    </p>
+    <form method="post" action="{{ url_for('admin.create_user') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label small" for="f-student-no">学号 / 工号 <span class="req">*</span></label>
+          <input class="form-control form-control-sm" id="f-student-no" name="student_no" maxlength="20" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small" for="f-name">姓名 <span class="req">*</span></label>
+          <input class="form-control form-control-sm" id="f-name" name="name" maxlength="50" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small" for="f-role">角色 <span class="req">*</span></label>
+          <select class="form-select form-select-sm" id="f-role" name="role">
+            {% for code, label in role_labels.items() %}
+              <option value="{{ code }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small" for="f-club">所属社团</label>
+          <input class="form-control form-control-sm" id="f-club" name="club_name" maxlength="100">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small" for="f-email">邮箱</label>
+          <input class="form-control form-control-sm" id="f-email" name="email" maxlength="100">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small" for="f-password">初始密码 <span class="req">*</span></label>
+          <input class="form-control form-control-sm" id="f-password" name="password" type="text"
+                 minlength="{{ min_password_length }}" required>
+          <div class="form-text">至少 {{ min_password_length }} 位。交给本人后请他自行修改。</div>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-primary mt-3" type="submit">创建账号</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

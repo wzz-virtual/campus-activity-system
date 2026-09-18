@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
+
+{% block title %}数据统计 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">数据统计</h1>
+<p class="text-secondary small mb-4">
+  我创建的全部活动。汇总口径是<b>所有活动加总后再算率</b>，不是各活动率的平均——
+  平均会失真：一场 2 人活动 100% 签到，会把 200 人活动 50% 的签到率硬拉到 75%。
+</p>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ overview.activity_count }}</div>
+      <div class="small text-secondary">活动数</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ overview.enrolled }}</div>
+      <div class="small text-secondary">累计报名</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ overview.checked_in }}</div>
+      <div class="small text-secondary">累计到场</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ overview.check_in_rate }}%</div>
+      <div class="small text-secondary">整体签到率</div>
+    </div></div>
+  </div>
+</div>
+
+{% if not activities %}
+  <div class="card">
+    <div class="card-body text-center text-secondary py-5">
+      <div class="fs-3 mb-2">📊</div>
+      还没有可统计的活动。
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <div class="card-body">
+      <h2 class="h6 mb-3">分活动明细</h2>
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>活动</th>
+              <th style="width:90px">状态</th>
+              <th style="width:110px" class="text-end">报名 / 上限</th>
+              <th style="width:90px" class="text-end">实到</th>
+              <th style="width:90px" class="text-end">签到率</th>
+              <th style="width:90px" class="text-end">上座率</th>
+              <th style="width:130px" class="text-end">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for activity in activities %}
+            {% set s = activity_stats(activity) %}
+            <tr>
+              <td>
+                <a class="link-dark text-decoration-none"
+                   href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
+                  {{ activity.title }}
+                </a>
+                <div class="small text-secondary">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</div>
+              </td>
+              <td>{{ m.status_badge(activity) }}</td>
+              <td class="text-end">{{ s.enrolled }} / {{ s.capacity }}</td>
+              <td class="text-end">{{ s.checked_in }}</td>
+              <td class="text-end">{{ s.check_in_rate }}%</td>
+              <td class="text-end">{{ s.fill_rate }}%</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-secondary"
+                   href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">详情</a>
+                <a class="btn btn-sm btn-outline-secondary"
+                   href="{{ url_for('activities.export_enrollments', activity_id=activity.id) }}">导出</a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

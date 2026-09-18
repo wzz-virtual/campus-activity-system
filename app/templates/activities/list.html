@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
+
+{% block title %}活动广场 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-1">活动广场</h1>
+    <p class="text-secondary small mb-0">
+      共 {{ pagination.total }} 场活动，第 {{ pagination.page }} / {{ pagination.pages or 1 }} 页
+    </p>
+  </div>
+  {% if current_user.is_authenticated and (current_user.is_club or current_user.is_admin) %}
+    <a class="btn btn-sm btn-primary" href="{{ url_for('activities.new_activity') }}">发布活动</a>
+  {% endif %}
+</div>
+
+{# 筛选表单用 GET。这样筛选结果本身就是一个可分享、可收藏、可刷新的地址，
+   比把条件存在 session 里可靠得多——用户发一条链接给别人，看到的就是同一批结果。 #}
+<form class="card mb-3" method="get" action="{{ url_for('activities.list_activities') }}">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-sm-5">
+        <label class="form-label small" for="f-keyword">关键词</label>
+        <input class="form-control form-control-sm" id="f-keyword" name="keyword"
+               value="{{ keyword }}" placeholder="标题 / 简介 / 地点">
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label small" for="f-category">分类</label>
+        <select class="form-select form-select-sm" id="f-category" name="category">
+          <option value="">全部分类</option>
+          {% for category in categories %}
+            <option value="{{ category.id }}"
+              {{ 'selected' if current_category == category.id }}>{{ category.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-2">
+        <label class="form-label small" for="f-status">状态</label>
+        <select class="form-select form-select-sm" id="f-status" name="status">
+          <option value="">全部状态</option>
+          {% for value, label in [('PUBLISHED','报名中'), ('ONGOING','进行中'), ('FINISHED','已结束'), ('CANCELED','已取消')] %}
+            <option value="{{ value }}" {{ 'selected' if current_status == value }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-2 d-flex gap-2">
+        <button class="btn btn-sm btn-primary flex-fill" type="submit">筛选</button>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.list_activities') }}">重置</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+{% if not activities %}
+  <div class="card">
+    <div class="card-body text-center text-secondary py-5">
+      <div class="fs-3 mb-2">🔍</div>
+      没有符合条件的活动。换个筛选条件试试。
+    </div>
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  {% for activity in activities %}
+    {% set mine = my_enrollments.get(activity.id) %}
+    <div class="col-12 col-lg-6">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+            <h2 class="h6 mb-0">
+              <a class="link-dark text-decoration-none"
+                 href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
+                {{ activity.title }}
+              </a>
+            </h2>
+            {{ m.status_badge(activity) }}
+          </div>
+
+          <div class="small text-secondary mb-2">
+            {% if activity.category %}<span class="me-2">🏷 {{ activity.category.name }}</span>{% endif %}
+            <span class="me-2">🕒 {{ activity.start_time|localtime }} 起</span>
+            <span>📍 {{ activity.location }}</span>
+          </div>
+
+          {% if activity.description %}
+            <p class="small text-secondary mb-2">{{ activity.description|truncate(60) }}</p>
+          {% endif %}
+
+          <div class="small mb-3">
+            {# 决策所需的信息直接摆在卡片上：还剩多少名额、报名有没有截止。
+               不要让学生点进去才发现报不上。 #}
+            {{ m.quota_text(activity) }}
+            <span class="text-secondary mx-1">·</span>
+            {{ m.enroll_closed_note(activity, now) }}
+          </div>
+
+          <div class="mt-auto d-flex align-items-center gap-2">
+            <a class="btn btn-sm btn-outline-primary"
+               href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看详情</a>
+            {% if mine and mine.status == 'ENROLLED' %}
+              <span class="badge text-bg-primary">你已报名</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{% if pagination.pages and pagination.pages > 1 %}
+  <nav class="mt-4">
+    <ul class="pagination pagination-sm justify-content-center mb-0">
+      {% set args = {'keyword': keyword, 'category': current_category or '', 'status': current_status} %}
+      <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
+        <a class="page-link" href="{{ url_for('activities.list_activities', page=pagination.prev_num, **args) }}">上一页</a>
+      </li>
+      {% for num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+        {% if num %}
+          <li class="page-item {{ 'active' if num == pagination.page }}">
+            <a class="page-link" href="{{ url_for('activities.list_activities', page=num, **args) }}">{{ num }}</a>
+          </li>
+        {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+      {% endfor %}
+      <li class="page-item {{ 'disabled' if not pagination.has_next }}">
+        <a class="page-link" href="{{ url_for('activities.list_activities', page=pagination.next_num, **args) }}">下一页</a>
+      </li>
+    </ul>
+  </nav>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}签到 · {{ activity.title }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb small">
+    <li class="breadcrumb-item"><a href="{{ url_for('activities.my_enrollments') }}">我的报名</a></li>
+    <li class="breadcrumb-item active">签到</li>
+  </ol>
+</nav>
+
+<div class="card">
+  <div class="card-body">
+    <h1 class="h5 mb-1">{{ activity.title }}</h1>
+    <p class="small text-secondary mb-4">
+      🕒 {{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}　📍 {{ activity.location }}
+    </p>
+
+    <h2 class="h6">我的签到状态</h2>
+    <p class="mb-4">
+      <span class="badge {{ state_styles.get(check_in_state, 'text-bg-secondary') }}">
+        {{ state_labels.get(check_in_state, check_in_state) }}
+      </span>
+    </p>
+
+    {% if check_in_state == 'checked_in' %}
+      <div class="alert alert-success mb-0">
+        你已经签到完成，无需重复操作。
+        {% if enrollment and enrollment.check_in_at %}
+          <div class="small mt-1">
+            签到时间：{{ enrollment.check_in_at|localtime('%Y-%m-%d %H:%M') }}
+            {% if not enrollment.check_in_by %}（自助签到）{% else %}（组织者核验）{% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+    {% elif activity.status != 'ONGOING' %}
+      {# 按钮不可用时必须说明原因，不能只置灰 #}
+      <div class="alert alert-secondary mb-0">
+        {% if activity.status == 'PUBLISHED' %}
+          活动还没开始，签到通道尚未开放。
+        {% elif activity.status == 'FINISHED' %}
+          活动已结束，签到通道已关闭。
+        {% elif activity.status == 'CANCELED' %}
+          活动已取消。
+        {% else %}
+          活动尚未发布。
+        {% endif %}
+      </div>
+
+    {% elif not enrollment or enrollment.status != 'ENROLLED' %}
+      <div class="alert alert-warning mb-0">
+        你没有报名这个活动，无法签到。签到信息挂在报名记录上，只有报名的人能签到。
+      </div>
+
+    {% else %}
+      <p class="small text-secondary">
+        请输入现场公布的 6 位签到码。签到码在活动结束后自动失效。
+      </p>
+      <form method="post" class="row g-2 align-items-start" style="max-width:340px">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="col">
+          <input class="form-control form-control-lg text-center" name="code"
+                 inputmode="numeric" maxlength="6" placeholder="6 位数字"
+                 autocomplete="off" autofocus>
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-lg btn-primary" type="submit">签到</button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

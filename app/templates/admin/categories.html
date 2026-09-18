@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}分类管理 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">分类管理</h1>
+<p class="text-secondary small mb-4">
+  分类只由管理员维护。删除前会校验是否仍被活动引用——直接删会让那些活动的分类
+  指向一个不存在的记录，列表页上留一串空白，很难查是哪里出的问题。
+</p>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width:70px">排序</th>
+              <th>分类名称</th>
+              <th style="width:110px" class="text-end">关联活动</th>
+              <th style="width:190px" class="text-end">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for category, activity_count in rows %}
+            <tr>
+              <td>
+                <input class="form-control form-control-sm" form="cat-{{ category.id }}"
+                       name="sort_order" value="{{ category.sort_order }}" style="width:60px">
+              </td>
+              <td>
+                <input class="form-control form-control-sm" form="cat-{{ category.id }}"
+                       name="name" value="{{ category.name }}" maxlength="30">
+              </td>
+              <td class="text-end">{{ activity_count }}</td>
+              <td class="text-end">
+                <div class="d-inline-flex gap-1">
+                  <button class="btn btn-sm btn-outline-secondary" type="submit" form="cat-{{ category.id }}">保存</button>
+                  {% if activity_count %}
+                    {# 被引用时直接把按钮禁用并说明原因，而不是点了才报错 #}
+                    <button class="btn btn-sm btn-outline-danger" type="button" disabled
+                            title="仍有活动使用该分类">删除</button>
+                  {% else %}
+                    <form method="post"
+                          action="{{ url_for('admin.delete_category', category_id=category.id) }}"
+                          onsubmit="return confirm('删除分类「{{ category.name }}」？');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
+                    </form>
+                  {% endif %}
+                </div>
+                {# 每一行一个独立表单，多个按钮靠 form 属性关联到同一个表单 #}
+                <form id="cat-{{ category.id }}" method="post"
+                      action="{{ url_for('admin.update_category', category_id=category.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                </form>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="text-center text-secondary py-4">还没有任何分类。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-body">
+        <h2 class="h6 mb-3">新增分类</h2>
+        <form method="post" action="{{ url_for('admin.create_category') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label class="form-label small" for="f-name">分类名称</label>
+            <input class="form-control form-control-sm" id="f-name" name="name" maxlength="30"
+                   placeholder="如：讲座 / 文体 / 志愿 / 竞赛">
+          </div>
+          <div class="mb-3">
+            <label class="form-label small" for="f-sort">排序（越小越前）</label>
+            <input class="form-control form-control-sm" id="f-sort" name="sort_order" value="0">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">创建分类</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

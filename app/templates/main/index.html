@@ -1,43 +1,72 @@
 {% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
 
 {% block content %}
 <div class="p-4 mb-4 bg-white rounded-3 border">
   <h1 class="h4 mb-2">校园活动管理系统</h1>
-  <p class="text-secondary mb-0">
-    发布活动、在线报名、现场签到、数据统计。
+  <p class="text-secondary mb-3">
+    把校园活动从「群通知 + 在线表格」搬到线上，跑通一条可追溯的闭环：
   </p>
+  <p class="mb-0">
+    <span class="badge text-bg-light border">组织者发布</span>
+    <span class="text-secondary">→</span>
+    <span class="badge text-bg-light border">学生浏览报名</span>
+    <span class="text-secondary">→</span>
+    <span class="badge text-bg-light border">现场签到</span>
+    <span class="text-secondary">→</span>
+    <span class="badge text-bg-light border">统计复盘</span>
+  </p>
+  <p class="text-secondary small mt-3 mb-0">
+    任何一个环节断了（比如报了名却不知道有没有报上、到了现场签不了到），
+    用户就会退回群里用表格。
+  </p>
+  <div class="d-flex flex-wrap gap-2 mt-3">
+    <a class="btn btn-sm btn-primary" href="{{ url_for('activities.list_activities') }}">进入活动广场</a>
+    {% if not current_user.is_authenticated %}
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('auth.login') }}">登录</a>
+    {% endif %}
+  </div>
 </div>
 
-<div class="row g-3">
-  <div class="col-md-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <h2 class="h6">活动列表</h2>
-        <p class="text-secondary small mb-0">
-          浏览与筛选活动，查看详情并报名。<span class="text-muted">（M3 实现）</span>
-        </p>
-      </div>
+<h2 class="h5 mb-3">进行中与报名中的活动</h2>
+
+{% if not upcoming %}
+  <div class="card mb-4">
+    <div class="card-body text-center text-secondary py-4">
+      暂时还没有发布的活动。
     </div>
   </div>
-  <div class="col-md-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <h2 class="h6">发布活动</h2>
-        <p class="text-secondary small mb-0">
-          社团提交后由校级管理员审核，管理员可直接发布。<span class="text-muted">（M1 实现）</span>
-        </p>
+{% else %}
+  <div class="row g-3 mb-4">
+    {% for activity in upcoming %}
+      <div class="col-12 col-lg-6">
+        <div class="card h-100 shadow-sm">
+          <div class="card-body d-flex flex-column">
+            <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+              <h3 class="h6 mb-0">
+                <a class="link-dark text-decoration-none"
+                   href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
+                  {{ activity.title }}
+                </a>
+              </h3>
+              {{ m.status_badge(activity) }}
+            </div>
+            <div class="small text-secondary mb-2">
+              🕒 {{ activity.start_time|localtime }}　📍 {{ activity.location }}
+            </div>
+            <div class="small mb-3">{{ m.quota_text(activity) }}</div>
+            <div class="mt-auto">
+              <a class="btn btn-sm btn-outline-primary"
+                 href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看详情</a>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+    {% endfor %}
   </div>
-  <div class="col-md-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <h2 class="h6">签到与统计</h2>
-        <p class="text-secondary small mb-0">
-          统计报名人数、实到人数与签到率。<span class="text-muted">（M4 实现）</span>
-        </p>
-      </div>
-    </div>
-  </div>
-</div>
+{% endif %}
+
+<p class="text-secondary small">
+  平台目前有 {{ published_count }} 场活动已发布或归档。
+</p>
 {% endblock %}

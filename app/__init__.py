@@ -5,13 +5,13 @@
 """
 
 import os
-from datetime import timedelta, timezone
 
 import click
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from flask_wtf.csrf import CSRFError
 
+from . import timeutils
 from .config import CONFIG_MAP
 from .extensions import csrf, db, login_manager
 from .http_helpers import wants_json
@@ -63,7 +63,7 @@ def create_app(config_name=None, **overrides):
     login_manager.init_app(app)
     csrf.init_app(app)
 
-    # 必须在这里 import，让五张表的定义在第一次访问数据库前注册到 db.metadata
+    # 必须在这里 import，让所有表的定义在第一次访问数据库前注册到 db.metadata
     from . import models  # noqa: F401
 
     @login_manager.user_loader
@@ -90,13 +90,27 @@ def create_app(config_name=None, **overrides):
         target = request.path if request.method == "GET" else None
         return redirect(url_for("auth.login", next=target))
 
-    from . import admin, auth, main
+    from . import activities, admin, auth, main, services
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
+    app.register_blueprint(activities.bp)
     app.register_blueprint(admin.bp)
 
     # ---- 全局请求钩子 ----
+
+    @app.before_request
+    def advance_activity_statuses():
+        """按时间把到点的活动推进到下一个状态。
+
+        放在这里而不是定时任务里：状态完全由时间决定，读的时候现算一次即可，
+        不必为 MVP 引入一套调度器依赖。静态文件请求跳过，没必要为一张 CSS
+        去动数据库。
+        """
+        if request.endpoint == "static":
+            return None
+        services.sync_activity_statuses()
+        return None
 
     # 待改密状态下唯一还能访问的几个端点
     PASSWORD_CHANGE_ALLOWED_ENDPOINTS = {
@@ -192,11 +206,6 @@ def create_app(config_name=None, **overrides):
 
     # ---- 模板过滤器 ----
 
-    # 展示用时区。中国标准时间全年都是 UTC+8，没有夏令时，
-    # 因此用固定偏移就够了，不必为这一个时区引入 tzdata 依赖
-    # （Windows 不自带 IANA 时区库，用 ZoneInfo 还得额外装包）。
-    display_timezone = timezone(timedelta(hours=8))
-
     @app.template_filter("localtime")
     def localtime_filter(value, fmt="%m-%d %H:%M"):
         """把数据库里的 UTC 时间转成本地时间再格式化。
@@ -205,10 +214,17 @@ def create_app(config_name=None, **overrides):
         会让用户看到早 8 小时的时间——这种错误不会报异常、不会崩，
         只会让人在错误的时刻跑到活动场地。属于最难发现的一类缺陷。
         """
-        if value is None:
-            return "—"
-        # 存进去的是不含时区信息的 UTC，这里显式补上 UTC 再转换
-        return value.replace(tzinfo=timezone.utc).astimezone(display_timezone).strftime(fmt)
+        return timeutils.format_local(value, fmt)
+
+    @app.template_filter("localinput")
+    def localinput_filter(value):
+        """格式化成 ``<input type="datetime-local">`` 能回填的形式。"""
+        return timeutils.format_local_input(value)
+
+    @app.template_global()
+    def cancel_deadline_text(activity):
+        """「还能取消到什么时候」。模板里直接调，避免每个视图都算一遍。"""
+        return services.cancel_deadline_text(activity)
 
     # ---- 命令行工具 ----
 
@@ -217,6 +233,27 @@ def create_app(config_name=None, **overrides):
         """根据模型建表。"""
         db.create_all()
         print("数据库表已创建")
+
+    @app.cli.command("seed-demo")
+    def seed_demo():
+        """写入演示数据：分类、三个角色的账号、覆盖全部状态的活动与报名记录。"""
+        from .seed import DEMO_ACCOUNTS, DEMO_PASSWORD, seed_demo_data
+
+        try:
+            summary = seed_demo_data()
+        except RuntimeError as exc:
+            # 转成 ClickException，命令行里就是一句干净的报错，
+            # 而不是一长串 Python 调用栈
+            raise click.ClickException(str(exc))
+
+        print(
+            f"已写入演示数据：{summary['categories']} 个分类、"
+            f"{summary['users']} 个账号、{summary['activities']} 场活动。"
+        )
+        print(f"\n所有演示账号的密码都是：{DEMO_PASSWORD}\n")
+        for student_no, name, role, club_name in DEMO_ACCOUNTS:
+            suffix = f"（{club_name}）" if club_name else ""
+            print(f"  {role:<8} {student_no:<10} {name}{suffix}")
 
     @app.cli.command("create-user")
     @click.option("--student-no", required=True, help="学号 / 工号，同时作为登录账号")

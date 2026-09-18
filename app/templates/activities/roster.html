@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
+
+{% block title %}报名与签到 · {{ activity.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-1">报名与签到</h1>
+    <p class="text-secondary small mb-0">
+      <a class="link-secondary" href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">{{ activity.title }}</a>
+      · {{ m.status_badge(activity) }}
+    </p>
+  </div>
+
+  {# 活动切换器：组织者不必退回列表再点进来 #}
+  {% if siblings|length > 1 %}
+    <form class="d-flex gap-2" method="get"
+          action="{{ url_for('activities.activity_roster', activity_id=activity.id) }}"
+          onchange="this.submit()">
+      <select class="form-select form-select-sm" name="__switch">
+        {% for item in siblings %}
+          <option value="{{ item.id }}" {{ 'selected' if item.id == activity.id }}
+                  data-href="{{ url_for('activities.activity_roster', activity_id=item.id) }}">
+            {{ item.title }}（{{ item.status_label }}）
+          </option>
+        {% endfor %}
+      </select>
+      <noscript><button class="btn btn-sm btn-outline-secondary">切换</button></noscript>
+    </form>
+    {# 用纯链接兜底：脚本被禁用时下拉框也能用 #}
+    <div class="d-none d-md-flex flex-wrap gap-1">
+      {% for item in siblings %}
+        {% if item.id != activity.id %}
+          <a class="btn btn-sm btn-outline-secondary"
+             href="{{ url_for('activities.activity_roster', activity_id=item.id) }}">
+            {{ item.title|truncate(12) }}
+          </a>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ stats.enrolled }}<span class="fs-6 text-secondary"> / {{ stats.capacity }}</span></div>
+      <div class="small text-secondary">报名人数</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ stats.checked_in }}</div>
+      <div class="small text-secondary">实到人数</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ stats.check_in_rate }}%</div>
+      <div class="small text-secondary">签到率（实到 ÷ 报名）</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ stats.fill_rate }}%</div>
+      <div class="small text-secondary">上座率（报名 ÷ 上限）</div>
+    </div></div>
+  </div>
+</div>
+
+{# ---- 签到码：学生自助签到的凭据 ---- #}
+<div class="card mb-3">
+  <div class="card-body">
+    <h2 class="h6 mb-2">签到码</h2>
+    {% if activity.status == 'ONGOING' and activity.check_in_code %}
+      <p class="mb-2">
+        <span class="display-6 fw-bold" style="letter-spacing:.14em">{{ activity.check_in_code }}</span>
+      </p>
+      <p class="small text-secondary mb-0">
+        把它投在屏幕上或写在门口，学生在活动详情页输入即可自助签到。
+        活动结束后签到码自动失效。
+      </p>
+    {% elif activity.status == 'PENDING' or activity.status == 'DRAFT' or activity.status == 'REJECTED' %}
+      <p class="small text-secondary mb-0">
+        活动尚未发布，还不能开启签到。
+      </p>
+    {% elif activity.status == 'FINISHED' or activity.status == 'CANCELED' %}
+      <p class="small text-secondary mb-0">
+        活动已{{ '结束' if activity.status == 'FINISHED' else '取消' }}，签到通道已关闭。
+      </p>
+    {% elif activity.status == 'PUBLISHED' %}
+      <p class="small text-secondary mb-2">
+        活动还没开始。开启签到后活动会进入「进行中」，同时关闭报名与取消报名通道。
+      </p>
+      <form method="post" action="{{ url_for('activities.open_check_in', activity_id=activity.id) }}"
+            onsubmit="return confirm('开启签到后报名与取消报名通道会关闭，确定吗？');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-primary" type="submit">开启签到</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <h2 class="h6 mb-0">报名名单（{{ stats.enrolled }} 人）</h2>
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary"
+           href="{{ url_for('activities.export_enrollments', activity_id=activity.id) }}">导出 CSV</a>
+        <a class="btn btn-sm btn-outline-secondary"
+           href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">数据统计</a>
+      </div>
+    </div>
+
+    {% if not enrollments %}
+      <p class="text-secondary small mb-0">还没有人报名。</p>
+    {% else %}
+      {% if activity.status != 'ONGOING' %}
+        <div class="alert alert-light border small py-2">
+          只有<b>进行中</b>的活动才能核验签到。当前状态：{{ activity.status_label }}。
+        </div>
+      {% endif %}
+
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width:52px">#</th>
+              <th>学号</th>
+              <th>姓名</th>
+              <th style="width:170px">报名时间</th>
+              <th style="width:110px">签到状态</th>
+              <th style="width:150px" class="text-end">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for enrollment in enrollments %}
+            <tr>
+              <td class="text-secondary small">{{ loop.index }}</td>
+              <td>{{ enrollment.user.student_no }}</td>
+              <td>
+                {{ enrollment.user.name }}
+                {% if enrollment.user_id == current_user.id %}<span class="badge text-bg-light border">我</span>{% endif %}
+              </td>
+              <td class="small">{{ enrollment.enrolled_at|localtime('%Y-%m-%d %H:%M') }}</td>
+              <td>
+                {% if enrollment.has_checked_in %}
+                  <span class="badge text-bg-success">已签到</span>
+                  <div class="small text-secondary">{{ enrollment.check_in_at|localtime }}</div>
+                {% else %}
+                  <span class="badge text-bg-light border">未签到</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                {% if activity.status == 'ONGOING' %}
+                  {# 显式提交「要把它设成什么」，而不是让服务端去猜当前状态再取反。
+                     两个标签页同时操作时，后者才是稳的。 #}
+                  <form method="post"
+                        action="{{ url_for('activities.toggle_check_in', activity_id=activity.id, user_id=enrollment.user_id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="checked_in" value="{{ '0' if enrollment.has_checked_in else '1' }}">
+                    <button class="btn btn-sm {{ 'btn-outline-secondary' if enrollment.has_checked_in else 'btn-outline-primary' }}"
+                            type="submit">
+                      {{ '撤销签到' if enrollment.has_checked_in else '标记签到' }}
+                    </button>
+                  </form>
+                {% else %}
+                  <span class="small text-secondary">—</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // 活动切换器：直接按 option 上的 data-href 跳转。
+  // 不用表单 GET 提交，是为了让地址栏始终是「某一场活动」的干净地址，
+  // 刷新和分享都指向同一场活动。
+  (function () {
+    var select = document.querySelector('select[name="__switch"]');
+    if (!select) return;
+    select.addEventListener('change', function () {
+      var option = select.options[select.selectedIndex];
+      if (option && option.dataset.href) {
+        window.location.href = option.dataset.href;
+      }
+    });
+  })();
+</script>
+{% endblock %}

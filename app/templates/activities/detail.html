@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
+
+{% block title %}{{ activity.title }} · 校园活动管理系统{% endblock %}
+
+{% block content %}
+{% set is_owner = current_user.is_authenticated and activity.organizer_id == current_user.id %}
+{% set is_admin = current_user.is_authenticated and current_user.is_admin %}
+{% set can_manage = is_owner or is_admin %}
+
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb small">
+    <li class="breadcrumb-item"><a href="{{ url_for('activities.list_activities') }}">活动广场</a></li>
+    <li class="breadcrumb-item active">{{ activity.title|truncate(24) }}</li>
+  </ol>
+</nav>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-2">
+      <h1 class="h4 mb-0">{{ activity.title }}</h1>
+      <div class="d-flex align-items-center gap-2">
+        {{ m.status_badge(activity) }}
+        {% if activity.status == 'PUBLISHED' %}
+          <span class="badge text-bg-light border">报名中</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <dl class="row small mb-3">
+      <dt class="col-sm-2 text-secondary">分类</dt>
+      <dd class="col-sm-10">{{ activity.category.name if activity.category else '未分类' }}</dd>
+
+      <dt class="col-sm-2 text-secondary">时间</dt>
+      <dd class="col-sm-10">
+        {{ activity.start_time|localtime('%Y-%m-%d %H:%M') }} —
+        {{ activity.end_time|localtime('%Y-%m-%d %H:%M') }}
+      </dd>
+
+      <dt class="col-sm-2 text-secondary">报名截止</dt>
+      <dd class="col-sm-10">{{ activity.enroll_deadline|localtime('%Y-%m-%d %H:%M') }}</dd>
+
+      <dt class="col-sm-2 text-secondary">地点</dt>
+      <dd class="col-sm-10">{{ activity.location }}</dd>
+
+      <dt class="col-sm-2 text-secondary">名额</dt>
+      <dd class="col-sm-10">
+        {{ activity.enrolled_count }} / {{ activity.capacity }} 人
+        （剩余 <strong>{{ activity.remaining }}</strong>）
+      </dd>
+
+      <dt class="col-sm-2 text-secondary">组织者</dt>
+      <dd class="col-sm-10">
+        {{ activity.organizer.name }}
+        {% if activity.organizer.club_name %}（{{ activity.organizer.club_name }}）{% endif %}
+      </dd>
+    </dl>
+
+    {% if activity.description %}
+      <div class="border-top pt-3">
+        <h2 class="h6">活动简介</h2>
+        {# 纯文本简介。换行照原样保留，但不渲染任何 HTML——
+           这是不做富文本编辑器的直接好处：没有 XSS 面。 #}
+        <p class="mb-0" style="white-space: pre-wrap">{{ activity.description }}</p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ---- 驳回原因：必须让创建者看得到，否则他不知道要改什么 ---- #}
+{% if activity.status == 'REJECTED' and activity.reject_reason %}
+  <div class="alert alert-danger">
+    <strong>活动被驳回。</strong>原因：{{ activity.reject_reason }}
+    {% if is_owner %}
+      <div class="small mt-1">修改后可以重新提交审核。</div>
+    {% endif %}
+  </div>
+{% endif %}
+
+{# ---- 报名 / 取消报名 ---- #}
+{% if current_user.is_authenticated %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">我的报名</h2>
+
+      {% if enrollment and enrollment.status == 'ENROLLED' %}
+        <p class="mb-2">
+          报名状态：
+          <span class="badge {{ check_in_state_styles.get(check_in_state, 'text-bg-secondary') }}">
+            {{ check_in_state_labels.get(check_in_state, check_in_state) }}
+          </span>
+          <span class="small text-secondary ms-2">
+            报名于 {{ enrollment.enrolled_at|localtime('%Y-%m-%d %H:%M') }}
+            {% if enrollment.check_in_at %}
+              · 签到于 {{ enrollment.check_in_at|localtime('%Y-%m-%d %H:%M') }}
+            {% endif %}
+          </span>
+        </p>
+
+        {% if cancel_reason %}
+          <div class="alert alert-secondary small mb-2 py-2">{{ cancel_reason }}</div>
+        {% elif cancel_until %}
+          {# 还能取消的时候就要把截止时刻写出来，让用户知道还剩多久可以反悔，
+             而不是等锁定了才告诉他不行。 #}
+          <div class="alert alert-info small mb-2 py-2">
+            在 {{ cancel_until|localtime('%Y-%m-%d %H:%M') }} 之前可以取消报名，
+            此后名单锁定。
+          </div>
+        {% endif %}
+
+        <div class="d-flex flex-wrap gap-2">
+          {% if activity.status == 'ONGOING' and check_in_state != 'checked_in' %}
+            <a class="btn btn-sm btn-primary"
+               href="{{ url_for('activities.check_in', activity_id=activity.id) }}">去签到</a>
+          {% endif %}
+
+          {% if not cancel_reason %}
+            <form method="post" action="{{ url_for('activities.unenroll_activity', activity_id=activity.id) }}"
+                  onsubmit="return confirm('确定要取消报名吗？名额会立即释放给其他人。');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              {# 破坏性操作用红色，与主操作在视觉上分开 #}
+              <button class="btn btn-sm btn-outline-danger" type="submit">取消报名</button>
+            </form>
+          {% else %}
+            {# 按钮不可用时必须说明原因，不能只置灰 #}
+            <button class="btn btn-sm btn-outline-danger" type="button" disabled>取消报名</button>
+          {% endif %}
+        </div>
+
+      {% else %}
+        {% if can_enroll %}
+          <form method="post" action="{{ url_for('activities.enroll_activity', activity_id=activity.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-primary" type="submit">立即报名</button>
+            <span class="small text-secondary ms-2">当前剩余 {{ activity.remaining }} 个名额</span>
+          </form>
+        {% else %}
+          <button class="btn btn-primary" type="button" disabled>立即报名</button>
+          <div class="small text-secondary mt-2">
+            {{ blocked_reason }}
+          </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+{% else %}
+  <div class="alert alert-info">
+    <a href="{{ url_for('auth.login', next=request.path) }}" class="alert-link">登录</a> 后即可报名。
+  </div>
+{% endif %}
+
+{# ---- 组织者与管理员的操作区 ---- #}
+{% if can_manage %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">管理</h2>
+
+      <div class="d-flex flex-wrap gap-2 mb-3">
+        <a class="btn btn-sm btn-outline-secondary"
+           href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">报名与签到</a>
+        <a class="btn btn-sm btn-outline-secondary"
+           href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">数据统计</a>
+        {% if can_edit %}
+          <a class="btn btn-sm btn-outline-secondary"
+             href="{{ url_for('activities.edit_activity', activity_id=activity.id) }}">编辑活动</a>
+        {% endif %}
+      </div>
+
+      <div class="d-flex flex-wrap gap-2">
+        {% if activity.status in ['DRAFT', 'REJECTED'] and activity.organizer_id == current_user.id %}
+          <form method="post" action="{{ url_for('activities.submit_activity', activity_id=activity.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-primary" type="submit">
+              {{ '重新提交审核' if activity.status == 'REJECTED' else '提交审核' }}
+            </button>
+          </form>
+        {% endif %}
+
+        {% if activity.status == 'PENDING' %}
+          {% if activity.organizer_id == current_user.id %}
+            <form method="post" action="{{ url_for('activities.withdraw_activity', activity_id=activity.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-outline-secondary" type="submit">撤回为草稿</button>
+            </form>
+          {% endif %}
+          {% if is_admin %}
+            <form method="post" action="{{ url_for('activities.approve_activity', activity_id=activity.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ request.path }}">
+              <button class="btn btn-sm btn-success" type="submit">审核通过</button>
+            </form>
+          {% endif %}
+        {% endif %}
+
+        {% if activity.status in ['PUBLISHED', 'ONGOING'] and can_manage %}
+          <form method="post" action="{{ url_for('activities.open_check_in', activity_id=activity.id) }}"
+                onsubmit="return confirm('开启签到后活动会进入「进行中」，报名与取消报名通道同时关闭。确定继续吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-primary" type="submit">开启签到</button>
+          </form>
+        {% endif %}
+
+        {% if activity.status == 'DRAFT' %}
+          <form method="post" action="{{ url_for('activities.delete_activity', activity_id=activity.id) }}"
+                onsubmit="return confirm('删除草稿后无法恢复，确定吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-danger" type="submit">删除草稿</button>
+          </form>
+        {% endif %}
+
+        {% if activity.status in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING'] %}
+          <form method="post" action="{{ url_for('activities.cancel_activity', activity_id=activity.id) }}"
+                onsubmit="return confirm('取消活动后学生将无法报名，已报名的记录会保留。确定吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-danger" type="submit">取消活动</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- 管理员的驳回入口：单独放，因为要填原因 ---- #}
+{% if is_admin and activity.status == 'PENDING' %}
+  <div class="card mb-3 border-danger">
+    <div class="card-body">
+      <h2 class="h6 mb-2">驳回这个活动</h2>
+      <p class="small text-secondary">
+        驳回必须填写原因，原因会展示给创建者。不填原因的驳回等于让组织者猜，
+        猜不出来就会来问你，沟通成本反而更高。
+      </p>
+      <form method="post" action="{{ url_for('activities.reject_activity', activity_id=activity.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.path }}">
+        <div class="mb-2">
+          <textarea class="form-control form-control-sm" name="reason" rows="2" maxlength="255"
+                    placeholder="例如：活动时间与校运会冲突，请调整后重新提交"></textarea>
+        </div>
+        <button class="btn btn-sm btn-outline-danger" type="submit">确认驳回</button>
+      </form>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- 统计概览（仅创建者与管理员） ---- #}
+{% if stats %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">数据概览</h2>
+      <div class="row g-3 text-center">
+        <div class="col-6 col-md-3">
+          <div class="border rounded p-2">
+            <div class="h5 mb-0">{{ stats.enrolled }}</div>
+            <div class="small text-secondary">报名人数</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="border rounded p-2">
+            <div class="h5 mb-0">{{ stats.checked_in }}</div>
+            <div class="small text-secondary">实到人数</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="border rounded p-2">
+            <div class="h5 mb-0">{{ stats.check_in_rate }}%</div>
+            <div class="small text-secondary">签到率</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="border rounded p-2">
+            <div class="h5 mb-0">{{ stats.fill_rate }}%</div>
+            <div class="small text-secondary">上座率</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

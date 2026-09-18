@@ -1,7 +1,13 @@
 """管理员后台。
 
-M0 阶段这里只有一件事：处理「忘记密码」的找回申请。
-待审核活动队列在 M2 补上。
+四件事：
+
+* 审核中心 —— 待审核队列 + 只追加的审核日志；
+* 全部活动 —— 按状态筛选、强制取消；
+* 分类管理 —— 增删改，删除前校验是否仍被活动引用；
+* 用户与角色 —— 创建账号、调整角色、停用账号。
+
+另外还保留了 M0 就有的「忘记密码」找回申请处理。
 """
 
 import secrets
@@ -20,6 +26,12 @@ from flask_login import current_user
 from .config import MIN_PASSWORD_LENGTH
 from .extensions import db
 from .models import (
+    Activity,
+    ActivityStatus,
+    AuditAction,
+    AuditLog,
+    Category,
+    Enrollment,
     PasswordResetRequest,
     ResetRequestStatus,
     Role,
@@ -59,7 +71,371 @@ def home():
         .where(PasswordResetRequest.status == ResetRequestStatus.PENDING)
     ).scalar_one()
 
-    return render_template("admin/home.html", pending_resets=pending_resets)
+    pending_activities = db.session.execute(
+        db.select(db.func.count())
+        .select_from(Activity)
+        .where(Activity.status == ActivityStatus.PENDING)
+    ).scalar_one()
+
+    user_count = db.session.execute(
+        db.select(db.func.count()).select_from(User)
+    ).scalar_one()
+
+    return render_template(
+        "admin/home.html",
+        pending_resets=pending_resets,
+        pending_activities=pending_activities,
+        user_count=user_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 审核中心
+# ---------------------------------------------------------------------------
+
+
+@bp.get("/audit")
+@role_required(Role.ADMIN)
+def audit_center():
+    """待审核队列 + 审核日志。
+
+    队列里带上「提交人」和「提交时间」——出问题时要知道找谁；
+    日志是只追加的，谁在什么时候批了什么，翻日志就能查到。
+    """
+    pending = (
+        db.session.execute(
+            db.select(Activity)
+            .where(Activity.status == ActivityStatus.PENDING)
+            .order_by(Activity.created_at)
+        )
+        .scalars()
+        .all()
+    )
+
+    # 一次查出这些活动的全部 SUBMIT 记录，避免在循环里逐个查（N+1）
+    submitted_at = {}
+    if pending:
+        logs = (
+            db.session.execute(
+                db.select(AuditLog)
+                .where(
+                    AuditLog.activity_id.in_([a.id for a in pending]),
+                    AuditLog.action == AuditAction.SUBMIT,
+                )
+                .order_by(AuditLog.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        for log in logs:
+            # 取最后一次提交的时间：被驳回后重新提交的活动，应该显示新的提交时刻
+            submitted_at[log.activity_id] = log.created_at
+
+    logs = (
+        db.session.execute(
+            db.select(AuditLog).order_by(AuditLog.created_at.desc()).limit(30)
+        )
+        .scalars()
+        .all()
+    )
+
+    return render_template(
+        "admin/audit.html",
+        pending=pending,
+        submitted_at=submitted_at,
+        logs=logs,
+        action_labels={
+            AuditAction.SUBMIT: "提交审核",
+            AuditAction.APPROVE: "审核通过",
+            AuditAction.REJECT: "审核驳回",
+            AuditAction.CANCEL: "取消活动",
+        },
+    )
+
+
+@bp.get("/activities")
+@role_required(Role.ADMIN)
+def all_activities():
+    """全部活动，可按状态筛选。"""
+    status = request.args.get("status") or ""
+    page = request.args.get("page", type=int) or 1
+    keyword = (request.args.get("keyword") or "").strip()
+
+    condition = db.select(Activity)
+    if status in ActivityStatus.ALL:
+        condition = condition.where(Activity.status == status)
+    else:
+        status = ""
+    if keyword:
+        condition = condition.where(Activity.title.like(f"%{keyword}%"))
+
+    pagination = db.paginate(
+        condition.order_by(Activity.start_time.desc()),
+        page=page,
+        per_page=15,
+        error_out=False,
+    )
+
+    return render_template(
+        "admin/activities.html",
+        pagination=pagination,
+        activities=pagination.items,
+        current_status=status,
+        keyword=keyword,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 分类管理
+# ---------------------------------------------------------------------------
+
+
+@bp.get("/categories")
+@role_required(Role.ADMIN)
+def categories():
+    """分类维护。顺带统计每个分类下有多少活动，删之前能一眼看出影响面。"""
+    rows = db.session.execute(
+        db.select(Category, db.func.count(Activity.id))
+        .outerjoin(Activity, Activity.category_id == Category.id)
+        .group_by(Category.id)
+        .order_by(Category.sort_order, Category.id)
+    ).all()
+
+    return render_template(
+        "admin/categories.html",
+        rows=rows,
+    )
+
+
+@bp.post("/categories")
+@role_required(Role.ADMIN)
+def create_category():
+    name = (request.form.get("name") or "").strip()
+    sort_order = request.form.get("sort_order", type=int) or 0
+
+    if not name:
+        flash("分类名称不能为空。", "danger")
+        return redirect(url_for("admin.categories"))
+    if len(name) > 30:
+        flash("分类名称不能超过 30 字。", "danger")
+        return redirect(url_for("admin.categories"))
+
+    existing = db.session.execute(
+        db.select(Category).where(Category.name == name)
+    ).scalar_one_or_none()
+    if existing is not None:
+        flash(f"分类「{name}」已经存在了。", "warning")
+        return redirect(url_for("admin.categories"))
+
+    db.session.add(Category(name=name, sort_order=sort_order))
+    db.session.commit()
+    flash(f"分类「{name}」已创建。", "success")
+    return redirect(url_for("admin.categories"))
+
+
+@bp.post("/categories/<int:category_id>")
+@role_required(Role.ADMIN)
+def update_category(category_id):
+    category = db.session.get(Category, category_id)
+    if category is None:
+        abort(404)
+
+    name = (request.form.get("name") or "").strip()
+    if not name or len(name) > 30:
+        flash("分类名称不能为空且不超过 30 字。", "danger")
+        return redirect(url_for("admin.categories"))
+
+    duplicate = db.session.execute(
+        db.select(Category).where(Category.name == name, Category.id != category_id)
+    ).scalar_one_or_none()
+    if duplicate is not None:
+        flash(f"分类「{name}」已经存在了。", "warning")
+        return redirect(url_for("admin.categories"))
+
+    category.name = name
+    category.sort_order = request.form.get("sort_order", type=int) or 0
+    db.session.commit()
+    flash("分类已更新。", "success")
+    return redirect(url_for("admin.categories"))
+
+
+@bp.post("/categories/<int:category_id>/delete")
+@role_required(Role.ADMIN)
+def delete_category(category_id):
+    """删除分类。
+
+    删除前必须校验是否仍被活动引用——直接删会让那些活动的 `category_id`
+    指向一个不存在的分类，列表页上就是一串空白，而且很难查是哪里出的问题。
+    """
+    category = db.session.get(Category, category_id)
+    if category is None:
+        abort(404)
+
+    used = db.session.execute(
+        db.select(db.func.count())
+        .select_from(Activity)
+        .where(Activity.category_id == category_id)
+    ).scalar_one()
+    if used:
+        flash(f"「{category.name}」下还有 {used} 场活动，不能删除。请先调整这些活动的分类。", "danger")
+        return redirect(url_for("admin.categories"))
+
+    db.session.delete(category)
+    db.session.commit()
+    flash(f"分类「{category.name}」已删除。", "info")
+    return redirect(url_for("admin.categories"))
+
+
+# ---------------------------------------------------------------------------
+# 用户与角色
+# ---------------------------------------------------------------------------
+
+
+@bp.get("/users")
+@role_required(Role.ADMIN)
+def users():
+    """用户列表。系统不提供自助注册，账号一律由管理员在这里创建。"""
+    keyword = (request.args.get("keyword") or "").strip()
+
+    condition = db.select(User)
+    if keyword:
+        pattern = f"%{keyword}%"
+        condition = condition.where(
+            db.or_(User.student_no.like(pattern), User.name.like(pattern))
+        )
+
+    people = (
+        db.session.execute(condition.order_by(User.role, User.student_no))
+        .scalars()
+        .all()
+    )
+
+    return render_template(
+        "admin/users.html",
+        users=people,
+        keyword=keyword,
+        role_labels=Role.LABELS,
+        min_password_length=MIN_PASSWORD_LENGTH,
+    )
+
+
+@bp.post("/users")
+@role_required(Role.ADMIN)
+def create_user():
+    student_no = (request.form.get("student_no") or "").strip()
+    name = (request.form.get("name") or "").strip()
+    password = request.form.get("password") or ""
+    role = (request.form.get("role") or Role.STUDENT).upper()
+
+    errors = []
+    if not student_no or len(student_no) > 20:
+        errors.append("学号 / 工号不能为空且不超过 20 字")
+    if not name or len(name) > 50:
+        errors.append("姓名不能为空且不超过 50 字")
+    if role not in Role.ALL:
+        errors.append("角色取值不合法")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        errors.append(f"初始密码不能少于 {MIN_PASSWORD_LENGTH} 个字符")
+
+    if not errors:
+        exists = db.session.execute(
+            db.select(User).where(User.student_no == student_no)
+        ).scalar_one_or_none()
+        if exists is not None:
+            errors.append(f"学号 / 工号 {student_no} 已经存在")
+
+    if errors:
+        for message in errors:
+            flash(message, "danger")
+        return redirect(url_for("admin.users"))
+
+    user = User(
+        student_no=student_no,
+        name=name,
+        role=role,
+        email=(request.form.get("email") or "").strip() or None,
+        club_name=(request.form.get("club_name") or "").strip() or None,
+    )
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+
+    flash(f"已创建账号：{user.student_no} {user.name}（{user.role_label}）", "success")
+    return redirect(url_for("admin.users"))
+
+
+def _admin_count():
+    return db.session.execute(
+        db.select(db.func.count()).select_from(User).where(User.role == Role.ADMIN)
+    ).scalar_one()
+
+
+@bp.post("/users/<int:user_id>")
+@role_required(Role.ADMIN)
+def update_user(user_id):
+    """调整角色 / 停用账号。
+
+    两条防止把自己锁在门外的护栏：
+
+    * 不能停用或降级**自己的**账号；
+    * 不能把**最后一个**管理员降级或停用。
+
+    这两条都不是产品文档要求的，但没有它们，管理员点错一下系统就没人能管了，
+    而且是不可逆的——重装数据库才能救回来。
+    """
+    user = db.session.get(User, user_id)
+    if user is None:
+        abort(404)
+
+    role = (request.form.get("role") or user.role).upper()
+    status = request.form.get("status", type=int)
+    if status not in (0, 1):
+        status = user.status
+
+    if role not in Role.ALL:
+        flash("角色取值不合法。", "danger")
+        return redirect(url_for("admin.users"))
+
+    if user.id == current_user.id:
+        if role != Role.ADMIN or status != 1:
+            flash("不能降级或停用自己的账号，否则你会立刻失去管理权限。", "danger")
+            return redirect(url_for("admin.users"))
+    elif user.role == Role.ADMIN and (role != Role.ADMIN or status == 0):
+        if _admin_count() <= 1:
+            flash("这是系统中最后一个管理员，不能降级或停用。", "danger")
+            return redirect(url_for("admin.users"))
+
+    user.role = role
+    user.status = status
+    user.club_name = (request.form.get("club_name") or "").strip() or None
+    db.session.commit()
+
+    flash(f"已更新 {user.name} 的角色与状态。", "success")
+    return redirect(url_for("admin.users"))
+
+
+@bp.post("/users/<int:user_id>/reset-password")
+@role_required(Role.ADMIN)
+def reset_user_password(user_id):
+    """直接把某个账号重置为随机临时密码（用于管理员当场核实身份的场景）。"""
+    user = db.session.get(User, user_id)
+    if user is None:
+        abort(404)
+
+    temp_password = generate_temp_password()
+    user.set_password(temp_password)
+    user.must_change_password = True
+    user.reset_login_failures()
+    db.session.commit()
+
+    # 临时密码只在这一次响应里显示，同样不走「重定向后显示」——
+    # 那等于把凭证写进客户端 Cookie
+    return render_template(
+        "admin/password_reset_done.html",
+        target=user,
+        temp_password=temp_password,
+        min_length=MIN_PASSWORD_LENGTH,
+    )
 
 
 @bp.get("/password-resets")

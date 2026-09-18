@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
+
+{% block title %}我的活动 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-1">我的活动</h1>
+    <p class="text-secondary small mb-0">共 {{ total }} 场，按状态分组</p>
+  </div>
+  <a class="btn btn-sm btn-primary" href="{{ url_for('activities.new_activity') }}">发布活动</a>
+</div>
+
+{% if not groups %}
+  <div class="card">
+    <div class="card-body text-center text-secondary py-5">
+      <div class="fs-3 mb-2">📌</div>
+      你还没有创建过活动。
+      <a href="{{ url_for('activities.new_activity') }}">现在发布一个</a>
+    </div>
+  </div>
+{% endif %}
+
+{% for status, label, items in groups %}
+  <section class="mb-4">
+    <h2 class="h6 mb-2">
+      {{ label }}
+      <span class="badge text-bg-light border">{{ items|length }}</span>
+    </h2>
+
+    <div class="card">
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>活动</th>
+              <th style="width:180px">时间</th>
+              <th style="width:120px">报名</th>
+              <th style="width:280px" class="text-end">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for activity in items %}
+            <tr>
+              <td>
+                <a class="link-dark text-decoration-none"
+                   href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
+                  {{ activity.title }}
+                </a>
+                <div class="small text-secondary">{{ activity.location }}</div>
+                {% if status == 'REJECTED' and activity.reject_reason %}
+                  <div class="small text-danger">驳回原因：{{ activity.reject_reason }}</div>
+                {% endif %}
+              </td>
+              <td class="small">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</td>
+              <td class="small">
+                {{ activity.enrolled_count }} / {{ activity.capacity }}
+                {% if activity.is_full %}<div class="text-danger small">已满</div>{% endif %}
+              </td>
+              {#
+                按状态给出这一状态下真正能做的操作。不渲染做不了的按钮，
+                也就不需要「点了才告诉你不行」这种最招人烦的交互。
+              #}
+              <td class="text-end">
+                <div class="d-inline-flex flex-wrap gap-1 justify-content-end">
+                  {% if status in ['DRAFT', 'REJECTED'] %}
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.edit_activity', activity_id=activity.id) }}">编辑</a>
+                    <form method="post" action="{{ url_for('activities.submit_activity', activity_id=activity.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-primary" type="submit">
+                        {{ '重新提交' if status == 'REJECTED' else '提交审核' }}
+                      </button>
+                    </form>
+                  {% elif status == 'PENDING' %}
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.edit_activity', activity_id=activity.id) }}">编辑</a>
+                    <form method="post" action="{{ url_for('activities.withdraw_activity', activity_id=activity.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-outline-secondary" type="submit">撤回</button>
+                    </form>
+                  {% elif status in ['PUBLISHED', 'ONGOING', 'FINISHED'] %}
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单与签到</a>
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">统计</a>
+                  {% else %}
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看</a>
+                  {% endif %}
+
+                  {% if status in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING'] %}
+                    <form method="post" action="{{ url_for('activities.cancel_activity', activity_id=activity.id) }}"
+                          onsubmit="return confirm('确定取消「{{ activity.title }}」吗？');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-outline-danger" type="submit">取消</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+{% endfor %}
+{% endblock %}

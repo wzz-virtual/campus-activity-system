@@ -9,6 +9,20 @@
 </head>
 <body class="bg-light">
 
+{#
+  二级导航按角色区分。
+
+  这里刻意用 request.endpoint 来判断当前项，而不是让子模板用 {% set active = ... %}
+  传进来：前者不依赖「子模板的顶层赋值能否被父模板看到」这条容易记错的规则，
+  任何模板忘了传变量也不会导致导航整体高亮错位。
+#}
+{% set ep = request.endpoint or '' %}
+{% macro navlink(endpoint, label, match=None) -%}
+  {% set active = (ep == (match or endpoint)) %}
+  <a class="btn btn-sm {{ 'btn-primary' if active else 'btn-outline-secondary' }}"
+     href="{{ url_for(endpoint) }}">{{ label }}</a>
+{%- endmacro %}
+
 <nav class="navbar navbar-expand-lg bg-white border-bottom">
   <div class="container">
     <a class="navbar-brand fw-medium" href="{{ url_for('main.index') }}">校园活动</a>
@@ -20,12 +34,6 @@
         <li class="nav-item"><a class="nav-link" href="{{ url_for('main.index') }}">首页</a></li>
         {% if current_user.is_authenticated %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('main.dashboard') }}">工作台</a></li>
-          {% if current_user.is_admin %}
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('admin.home') }}">管理后台</a></li>
-          {% endif %}
-          {% if current_user.is_club %}
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('main.club_home') }}">社团工作台</a></li>
-          {% endif %}
         {% endif %}
       </ul>
       <ul class="navbar-nav">
@@ -57,6 +65,31 @@
   </div>
 </nav>
 
+{% if current_user.is_authenticated %}
+<div class="bg-white border-bottom">
+  <div class="container d-flex flex-wrap gap-1 py-2">
+    {% if current_user.is_student %}
+      {{ navlink('activities.list_activities', '活动广场') }}
+      {{ navlink('activities.my_enrollments', '我的报名') }}
+    {% elif current_user.is_club %}
+      {{ navlink('activities.my_activities', '我的活动') }}
+      {{ navlink('activities.new_activity', '发布活动') }}
+      {{ navlink('activities.club_enrollments', '报名与签到') }}
+      {{ navlink('activities.club_stats', '数据统计') }}
+      {{ navlink('activities.list_activities', '活动广场') }}
+    {% elif current_user.is_admin %}
+      {{ navlink('admin.audit_center', '审核中心') }}
+      {{ navlink('admin.all_activities', '全部活动') }}
+      {{ navlink('activities.new_activity', '发布活动') }}
+      {{ navlink('admin.categories', '分类管理') }}
+      {{ navlink('admin.users', '用户管理') }}
+      {{ navlink('admin.password_resets', '密码找回') }}
+      {{ navlink('activities.list_activities', '活动广场') }}
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <main class="container py-4">
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -77,5 +110,6 @@
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

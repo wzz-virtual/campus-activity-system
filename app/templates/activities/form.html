@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}{{ '新建活动' if is_new else '编辑活动' }} · 校园活动管理系统{% endblock %}
+
+{#
+  一行一个字段，出错时把提示放在该输入框正下方。
+
+  关键约定：**校验失败不清空表单**。这个页面渲染的 value 一律来自 raw
+  （用户刚才提交的原始字符串），而不是数据库里的值；只有第一次打开发起
+  编辑时才由视图把库里的值填进 raw。这样「填了 9 个字段、第 10 个写错了」
+  不会让人从头再来一遍。
+#}
+{% macro field_error(name) -%}
+  {% if errors.get(name) %}
+    <div class="invalid-feedback d-block">{{ errors[name] }}</div>
+  {% endif %}
+{%- endmacro %}
+
+{% macro invalid(name) -%}
+  {{ ' is-invalid' if errors.get(name) }}
+{%- endmacro %}
+
+{% block content %}
+<h1 class="h4 mb-1">{{ '新建活动' if is_new else '编辑活动' }}</h1>
+<p class="text-secondary small mb-4">
+  {% if is_new %}
+    {% if current_user.is_admin %}
+      管理员创建的活动<b>跳过审核、直接发布</b>，学生立刻就能看到。
+    {% else %}
+      社团创建的活动会进入<b>待审核</b>队列，管理员通过后才会出现在活动广场。
+      暂时不想提交的可以先存草稿。
+    {% endif %}
+  {% else %}
+    当前状态：<span class="badge text-bg-light border">{{ activity.status_label }}</span>
+  {% endif %}
+</p>
+
+<form method="post"
+      action="{{ url_for('activities.create_activity') if is_new else url_for('activities.update_activity', activity_id=activity.id) }}"
+      novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">基本信息</h2>
+
+      <div class="mb-3">
+        <label class="form-label" for="f-title">活动标题 <span class="req">*</span></label>
+        <input class="form-control{{ invalid('title') }}" id="f-title" name="title"
+               value="{{ raw.title }}" maxlength="100" autocomplete="off">
+        {{ field_error('title') }}
+      </div>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label" for="f-category">活动分类 <span class="req">*</span></label>
+          <select class="form-select{{ invalid('category_id') }}" id="f-category" name="category_id">
+            <option value="">请选择分类</option>
+            {% for category in categories %}
+              <option value="{{ category.id }}"
+                {{ 'selected' if raw.category_id == category.id|string }}>{{ category.name }}</option>
+            {% endfor %}
+          </select>
+          {{ field_error('category_id') }}
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label" for="f-location">活动地点 <span class="req">*</span></label>
+          <input class="form-control{{ invalid('location') }}" id="f-location" name="location"
+                 value="{{ raw.location }}" maxlength="150">
+          {{ field_error('location') }}
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <label class="form-label" for="f-description">活动简介</label>
+        <textarea class="form-control" id="f-description" name="description" rows="4"
+                  placeholder="纯文本，支持换行">{{ raw.description }}</textarea>
+        <div class="form-text">不做富文本编辑器：排版够用，也省掉一整类脚本注入风险。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">时间与名额</h2>
+
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label" for="f-start">开始时间 <span class="req">*</span></label>
+          <input class="form-control{{ invalid('start_time') }}" type="datetime-local"
+                 id="f-start" name="start_time" value="{{ raw.start_time }}">
+          {{ field_error('start_time') }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="f-end">结束时间 <span class="req">*</span></label>
+          <input class="form-control{{ invalid('end_time') }}" type="datetime-local"
+                 id="f-end" name="end_time" value="{{ raw.end_time }}">
+          {{ field_error('end_time') }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="f-deadline">报名截止时间 <span class="req">*</span></label>
+          <input class="form-control{{ invalid('enroll_deadline') }}" type="datetime-local"
+                 id="f-deadline" name="enroll_deadline" value="{{ raw.enroll_deadline }}">
+          {{ field_error('enroll_deadline') }}
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-md-4">
+          <label class="form-label" for="f-capacity">人数上限 <span class="req">*</span></label>
+          <input class="form-control{{ invalid('capacity') }}" id="f-capacity" name="capacity"
+                 value="{{ raw.capacity }}" inputmode="numeric">
+          {{ field_error('capacity') }}
+        </div>
+        <div class="col-md-8">
+          <label class="form-label" for="f-cover">封面地址</label>
+          <input class="form-control{{ invalid('cover_url') }}" id="f-cover" name="cover_url"
+                 value="{{ raw.cover_url }}" maxlength="255" placeholder="可选">
+          {{ field_error('cover_url') }}
+        </div>
+      </div>
+
+      <div class="form-text mt-3">
+        时间按本地时区（UTC+8）填写，入库统一转成 UTC 保存。结束时间必须晚于开始时间，
+        报名截止时间不能晚于开始时间。
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex flex-wrap gap-2">
+    {% if is_new and current_user.is_club %}
+      <button class="btn btn-primary" type="submit" name="action" value="submit">提交审核</button>
+      {# 表单用同一个按钮名区分两种提交方式，服务端读 action 的值决定落到哪个状态 #}
+      <button class="btn btn-outline-secondary" type="submit" name="action" value="draft">存草稿</button>
+    {% elif is_new %}
+      <button class="btn btn-primary" type="submit" name="action" value="submit">直接发布</button>
+    {% else %}
+      <button class="btn btn-primary" type="submit">保存修改</button>
+    {% endif %}
+    <a class="btn btn-outline-secondary"
+       href="{{ url_for('activities.my_activities') if not is_new and current_user.is_club else url_for('activities.list_activities') }}">取消</a>
+  </div>
+</form>
+{% endblock %}
