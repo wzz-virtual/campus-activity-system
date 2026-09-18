@@ -192,13 +192,19 @@ def seed_demo_data():
     enroll(deadline_passed, all_students[2:9])
 
     # ④ 进行中 —— 签到开放，部分人已签到
+    #
+    # 结束时间刻意放到 6 小时之后，而不是按真实活动的 2 小时来设。
+    # 原因：这是唯一一场「进行中」的活动，整条「凭签到码签到」的演示路径都靠它。
+    # 原来的 +1 小时会让演示数据「过一小时就失效」——等隔一会儿再打开页面，
+    # 它已经变成「已结束」，签到通道关闭，看到的人只会以为功能是坏的。
+    # 演示数据要经得起隔几小时再打开，宁可让这场活动的时长不那么真实。
     ongoing = add_activity(
         title="书法体验课",
         category_id=categories["文体"].id,
         organizer_id=club.id,
         description="从执笔与基本笔画开始，两小时写出一幅小作品。",
-        start_time=now - timedelta(minutes=40),
-        end_time=now + timedelta(hours=1),
+        start_time=now - timedelta(minutes=30),
+        end_time=now + timedelta(hours=6),
         enroll_deadline=now - timedelta(days=1),
         location="学生活动中心 305",
         capacity=20,

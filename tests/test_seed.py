@@ -6,9 +6,10 @@
 """
 
 import re
+from datetime import timedelta
 
 from app.extensions import db as _db
-from app.models import Activity, ActivityStatus, Category, Enrollment
+from app.models import Activity, ActivityStatus, Category, Enrollment, utcnow
 from app.seed import ACTIVITY_COUNT, DEMO_PASSWORD
 
 
@@ -100,6 +101,30 @@ def test_seeded_ongoing_activity_has_a_check_in_code(app, client, login):
     login("20230101", password=DEMO_PASSWORD)
     page = client.get(f"/activities/{activity_id}/check-in").get_data(as_text=True)
     assert "签到" in page
+
+
+def test_seeded_ongoing_activity_stays_ongoing_for_hours(app):
+    """「进行中」的演示活动不能一个小时后就结束。
+
+    这是演示数据里**唯一**一场进行中的活动，「凭签到码签到」整条路径都靠它。
+    最初把它设成「播种后 1 小时结束」，结果过了 1 小时再看：活动已经变成
+    「已结束」，签到通道关闭，页面上只会写「活动已结束」——
+    看到的人很容易以为这是功能坏了，而不是数据过期了。
+
+    所以这里钉住「播种后至少还能撑两小时」，避免这类回归悄悄发生。
+    """
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    with app.app_context():
+        ongoing = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.ONGOING)
+        ).scalar_one()
+        remaining = ongoing.end_time - utcnow()
+
+    assert remaining >= timedelta(hours=2), (
+        f"进行中的演示活动只剩 {remaining} 就结束了，"
+        "签到演示路径会在演示到一半时失效"
+    )
 
 
 def test_seeded_accounts_can_all_log_in(app, client, login):
