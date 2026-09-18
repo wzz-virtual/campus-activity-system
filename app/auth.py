@@ -20,9 +20,9 @@ from flask import (
 from flask_login import current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .config import LOGIN_LOCK_DURATION, LOGIN_MAX_ATTEMPTS
+from .config import LOGIN_LOCK_DURATION, LOGIN_MAX_ATTEMPTS, MIN_PASSWORD_LENGTH
 from .extensions import db
-from .models import User
+from .models import PasswordResetRequest, ResetRequestStatus, User
 
 bp = Blueprint("auth", __name__, url_prefix="/auth")
 
@@ -127,6 +127,12 @@ def login():
         db.session.commit()
 
         login_user(user)
+
+        # 密码是被管理员重置过的，先逼本人改掉再放行
+        if user.must_change_password:
+            flash("当前使用的是管理员下发的临时密码，请先设置新密码。", "warning")
+            return redirect(url_for("auth.change_password"))
+
         flash(f"欢迎回来，{user.name}", "success")
         return redirect(_safe_next("main.dashboard"))
 
@@ -152,3 +158,83 @@ def me():
     角色永远只能由服务端决定。
     """
     return jsonify(current_user.to_dict())
+
+
+def _has_pending_reset_request(user_id):
+    return (
+        db.session.execute(
+            db.select(PasswordResetRequest.id).where(
+                PasswordResetRequest.user_id == user_id,
+                PasswordResetRequest.status == ResetRequestStatus.PENDING,
+            )
+        ).first()
+        is not None
+    )
+
+
+@bp.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    """忘记密码：提交找回申请，由管理员核实身份后重置。
+
+    ⚠️ 这个页面同样不能泄漏「哪些学号是真实存在的」——无论学号存不存在，
+    都返回**同一句**提示。否则它就成了一个比登录页更好用的账号枚举工具：
+    登录页还有失败次数限制，这里没有。
+
+    同一个用户只保留一条待处理申请，避免有人反复提交把管理员的队列刷满。
+    """
+    if current_user.is_authenticated:
+        return redirect(url_for("main.dashboard"))
+
+    if request.method == "POST":
+        student_no = (request.form.get("student_no") or "").strip()
+        note = (request.form.get("note") or "").strip()
+
+        user = _find_user(student_no)
+        if user is not None and not _has_pending_reset_request(user.id):
+            db.session.add(
+                PasswordResetRequest(user_id=user.id, note=note[:255] or None)
+            )
+            db.session.commit()
+
+        flash("已收到申请。管理员核实身份后会为你重置密码，请留意联系方式。", "info")
+        return redirect(url_for("auth.login"))
+
+    return render_template("auth/forgot_password.html")
+
+
+@bp.route("/change-password", methods=["GET", "POST"])
+@login_required
+def change_password():
+    """本人修改密码。
+
+    要求先验证当前密码：即使有人趁你离开工位用你已登录的浏览器，
+    也改不掉密码。
+    """
+    if request.method == "POST":
+        current_password = request.form.get("current_password") or ""
+        new_password = request.form.get("new_password") or ""
+        confirm_password = request.form.get("confirm_password") or ""
+
+        error = None
+        if not current_user.check_password(current_password):
+            error = "当前密码不正确"
+        elif len(new_password) < MIN_PASSWORD_LENGTH:
+            error = f"新密码长度不能少于 {MIN_PASSWORD_LENGTH} 个字符"
+        elif new_password != confirm_password:
+            error = "两次输入的新密码不一致"
+        elif new_password == current_password:
+            error = "新密码不能与当前密码相同"
+
+        if error:
+            flash(error, "danger")
+            return render_template("auth/change_password.html"), 400
+
+        current_user.set_password(new_password)
+        # 临时密码用完即作废，解除强制改密
+        current_user.must_change_password = False
+        db.session.commit()
+
+        flash("密码已更新", "success")
+        return redirect(url_for("main.dashboard"))
+
+    return render_template("auth/change_password.html")

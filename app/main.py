@@ -26,13 +26,6 @@ def dashboard():
     return render_template("main/dashboard.html")
 
 
-@bp.get("/admin/")
-@role_required(Role.ADMIN)
-def admin_home():
-    """管理后台。待审核活动列表在 M2 补上。"""
-    return render_template("main/admin.html")
-
-
 @bp.get("/club/")
 @role_required(Role.CLUB)
 def club_home():

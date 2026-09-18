@@ -266,9 +266,11 @@ UPDATE activity
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/auth/login` | 登录，返回 token 与用户信息 |
-| POST | `/auth/logout` | 登出 |
-| GET | `/auth/me` | 当前登录用户 |
+| GET / POST | `/auth/login` | 登录，建立会话 |
+| POST | `/auth/logout` | 登出，清空会话 |
+| GET | `/auth/me` | 当前登录用户（JSON） |
+| GET / POST | `/auth/forgot-password` | 提交密码找回申请（公开） |
+| GET / POST | `/auth/change-password` | 本人修改密码 |
 
 ### 活动
 
@@ -303,8 +305,12 @@ UPDATE activity
 | --- | --- | --- | --- |
 | GET | `/categories` | 公开 | 分类列表 |
 | POST / PUT / DELETE | `/categories/{id}` | ADMIN | 分类增改删 |
+| GET | `/admin/` | ADMIN | 管理后台首页 |
 | GET | `/admin/activities/pending` | ADMIN | 待审核列表 |
 | GET / PUT | `/admin/users/{id}` | ADMIN | 用户查询与角色调整 |
+| GET | `/admin/password-resets` | ADMIN | 密码找回申请队列 |
+| POST | `/admin/password-resets/{id}/resolve` | ADMIN | 重置为随机临时密码（临时密码仅在本次响应中显示一次） |
+| POST | `/admin/password-resets/{id}/reject` | ADMIN | 标记为未通过 |
 
 ## 8. 技术栈建议
 

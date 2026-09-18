@@ -39,7 +39,7 @@
 {% elif current_user.is_admin %}
   <div class="alert alert-info mb-0">
     管理员可以直接发布活动，并审核社团提交的活动。
-    前往 <a href="{{ url_for('main.admin_home') }}" class="alert-link">管理后台</a>。
+    前往 <a href="{{ url_for('admin.home') }}" class="alert-link">管理后台</a>。
   </div>
 {% endif %}
 {% endblock %}

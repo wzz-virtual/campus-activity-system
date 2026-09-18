@@ -41,7 +41,7 @@ def role_required(*roles):
 
         @bp.get("/admin/")
         @role_required(Role.ADMIN)
-        def admin_home():
+        def home():
             ...
 
     未登录 → 跳登录页（GET 请求会带 next 参数，登录后跳回来）

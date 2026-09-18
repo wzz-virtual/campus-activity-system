@@ -5,6 +5,7 @@
 """
 
 import os
+from datetime import timedelta, timezone
 
 import click
 from flask import Flask, jsonify, redirect, render_template, request, url_for
@@ -89,10 +90,36 @@ def create_app(config_name=None, **overrides):
         target = request.path if request.method == "GET" else None
         return redirect(url_for("auth.login", next=target))
 
-    from . import auth, main
+    from . import admin, auth, main
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
+    app.register_blueprint(admin.bp)
+
+    # ---- 全局请求钩子 ----
+
+    # 待改密状态下唯一还能访问的几个端点
+    PASSWORD_CHANGE_ALLOWED_ENDPOINTS = {
+        "auth.change_password",
+        "auth.logout",
+        "main.health",
+        "static",
+    }
+
+    @app.before_request
+    def force_password_change():
+        """用临时密码登录的用户，在改密码之前什么都做不了。
+
+        只在登录那一步重定向是不够的——用户完全可以敲地址栏绕过去。
+        限制必须落在每个请求上。
+        """
+        if not current_user.is_authenticated:
+            return None
+        if not getattr(current_user, "must_change_password", False):
+            return None
+        if request.endpoint in PASSWORD_CHANGE_ALLOWED_ENDPOINTS:
+            return None
+        return redirect(url_for("auth.change_password"))
 
     # ---- 响应头 ----
 
@@ -162,6 +189,26 @@ def create_app(config_name=None, **overrides):
     def inject_globals():
         """注入所有模板都能用的变量。"""
         return {"current_user": current_user}
+
+    # ---- 模板过滤器 ----
+
+    # 展示用时区。中国标准时间全年都是 UTC+8，没有夏令时，
+    # 因此用固定偏移就够了，不必为这一个时区引入 tzdata 依赖
+    # （Windows 不自带 IANA 时区库，用 ZoneInfo 还得额外装包）。
+    display_timezone = timezone(timedelta(hours=8))
+
+    @app.template_filter("localtime")
+    def localtime_filter(value, fmt="%m-%d %H:%M"):
+        """把数据库里的 UTC 时间转成本地时间再格式化。
+
+        ⚠️ 数据库统一存 UTC，展示时**必须**转换。直接把 UTC 当本地时间显示，
+        会让用户看到早 8 小时的时间——这种错误不会报异常、不会崩，
+        只会让人在错误的时刻跑到活动场地。属于最难发现的一类缺陷。
+        """
+        if value is None:
+            return "—"
+        # 存进去的是不含时区信息的 UTC，这里显式补上 UTC 再转换
+        return value.replace(tzinfo=timezone.utc).astimezone(display_timezone).strftime(fmt)
 
     # ---- 命令行工具 ----
 

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}管理后台 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">管理后台</h1>
+<p class="text-secondary small mb-4">
+  你以 <strong>{{ current_user.name }}</strong>（{{ current_user.role_label }}）身份登录。
+  此页面只有校级管理员可以访问。
+</p>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 mb-2">密码找回申请</h2>
+        <p class="text-secondary small mb-3">
+          学生忘记密码时会在这里提交申请。需要先核实身份，再由系统重置为随机临时密码。
+        </p>
+        <a class="btn btn-sm btn-primary" href="{{ url_for('admin.password_resets') }}">
+          进入处理{% if pending_resets %} <span class="badge text-bg-light">{{ pending_resets }}</span>{% endif %}
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 mb-2">待审核活动</h2>
+        <p class="text-secondary small mb-0">
+          审核队列在 M2 里程碑实现。社团发布的活动必须经管理员审核通过，才会出现在活动广场。
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

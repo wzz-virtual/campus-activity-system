@@ -91,6 +91,22 @@ class AuditAction:
     CANCEL = "CANCEL"
 
 
+class ResetRequestStatus:
+    """忘记密码申请的处理状态。"""
+
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    REJECTED = "REJECTED"
+
+    ALL = (PENDING, RESOLVED, REJECTED)
+
+    LABELS = {
+        PENDING: "待处理",
+        RESOLVED: "已重置",
+        REJECTED: "未通过",
+    }
+
+
 class User(UserMixin, db.Model):
     """用户。三种角色共用一张表，靠 role 字段区分。"""
 
@@ -112,6 +128,8 @@ class User(UserMixin, db.Model):
     failed_login_count = db.Column(db.SmallInteger, nullable=False, default=0)
     # 锁定到期时间，NULL 表示未锁定。到点自动放行，不需要管理员手工解锁。
     locked_until = db.Column(db.DateTime)
+    # 管理员重置密码后置 1，强制本人下次登录后立即修改
+    must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
@@ -357,3 +375,45 @@ class AuditLog(db.Model):
 
     def __repr__(self):
         return f"<AuditLog a={self.activity_id} {self.action}>"
+
+
+class PasswordResetRequest(db.Model):
+    """忘记密码的找回申请。
+
+    流程：学生提交申请 → 管理员核实身份 → 重置为随机临时密码并告知 →
+    学生用临时密码登录后被强制修改密码（`User.must_change_password`）。
+
+    **为什么不让管理员直接指定新密码**：那样管理员就知道了用户的密码，
+    账号就失去了「只有本人知道密码」这个最基本的属性，出了问题也说不清
+    是谁在用这个账号。系统只生成随机临时密码，并要求本人登录后立即改掉。
+    """
+
+    __tablename__ = "password_reset_request"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    # 学生自述的佐证信息（院系班级、联系方式等），供管理员核实身份
+    note = db.Column(db.String(255))
+    status = db.Column(
+        db.String(20), nullable=False, default=ResetRequestStatus.PENDING
+    )
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    handled_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    handled_at = db.Column(db.DateTime)
+    # 管理员处理时的备注，例如"已电话核实"
+    handle_note = db.Column(db.String(255))
+
+    # 一张表里有两个指向 user 的外键，必须显式指明各自用哪一个
+    user = db.relationship("User", foreign_keys=[user_id])
+    handler = db.relationship("User", foreign_keys=[handled_by])
+
+    __table_args__ = (
+        db.Index("idx_reset_status_created", "status", "created_at"),
+    )
+
+    @property
+    def status_label(self):
+        return ResetRequestStatus.LABELS.get(self.status, self.status)
+
+    def __repr__(self):
+        return f"<PasswordResetRequest u={self.user_id} {self.status}>"
