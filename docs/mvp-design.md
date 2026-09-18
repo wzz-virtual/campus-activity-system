@@ -396,10 +396,25 @@ UPDATE activity
 | `tests/test_stats.py` | M5：签到率 / 上座率口径、CSV 的 BOM 与转义、汇总口径 |
 | `tests/test_admin_console.py` | F8：分类增删改与引用校验、用户与角色、两道「别把自己锁在门外」的护栏 |
 | `tests/test_seed.py` | M6：`flask seed-demo` 的联调冒烟 |
+| `tests/test_server_smoke.py` | M6：**真实起服务器**的端到端冒烟（默认跳过，`pytest -m smoke` 运行） |
 | `tests/test_auth.py` / `test_permissions.py` / `test_security.py` / `test_password_reset.py` | M0 的安全基线（原有） |
 | `tests/test_demo.py` + `tests/demo_harness.cjs` | 静态原型 `demo/index.html` 的走查（原有） |
 
-### 10.2 两条容易写错的测试约定
+### 10.2 为什么要有 `test_server_smoke.py`
+
+其余测试都走 Flask 的测试客户端，它把 WSGI 调用**短路**了——`run.py`、
+`DATABASE_URL` 环境变量、`flask` 命令行这几段接线，测试客户端一个都覆盖不到。
+「测试全绿但 `python run.py` 起不来」是真会发生的。
+
+所以单独留一个文件真起服务器、用 HTTP 走主链路。它要占端口、跑十来秒，
+因此用 `smoke` 标记 **默认跳过**：
+
+```bat
+.venv\Scripts\python.exe -m pytest            :: 日常快速反馈
+.venv\Scripts\python.exe -m pytest -m smoke   :: 交付前跑一次
+```
+
+### 10.3 两条容易写错的测试约定
 
 1. **并发测试必须用文件型 SQLite。** 内存库是「每个连接一份独立数据」，
    多线程各写各的，测出来的「没有超卖」是假象。见 `concurrent_app` 装置。
