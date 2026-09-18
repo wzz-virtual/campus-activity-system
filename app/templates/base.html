@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}校园活动管理系统{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg bg-white border-bottom">
+  <div class="container">
+    <a class="navbar-brand fw-medium" href="{{ url_for('main.index') }}">校园活动</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="mainNav">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('main.index') }}">首页</a></li>
+        {% if current_user.is_authenticated %}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('main.dashboard') }}">工作台</a></li>
+          {% if current_user.is_admin %}
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('main.admin_home') }}">管理后台</a></li>
+          {% endif %}
+          {% if current_user.is_club %}
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('main.club_home') }}">社团工作台</a></li>
+          {% endif %}
+        {% endif %}
+      </ul>
+      <ul class="navbar-nav">
+        {% if current_user.is_authenticated %}
+          <li class="nav-item">
+            <span class="navbar-text me-3">
+              {{ current_user.name }}
+              <span class="badge text-bg-secondary">{{ current_user.role_label }}</span>
+            </span>
+          </li>
+          <li class="nav-item">
+            <form method="post" action="{{ url_for('auth.logout') }}" class="d-inline">
+              {# 登出同样是写操作，也要带 CSRF 凭证。
+                 否则别人可以在自己的页面上放一个表单，把你的登录态强制清掉。 #}
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-outline-secondary">退出</button>
+            </form>
+          </li>
+        {% else %}
+          <li class="nav-item">
+            <a class="btn btn-sm btn-primary" href="{{ url_for('auth.login') }}">登录</a>
+          </li>
+        {% endif %}
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<main class="container py-4">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+          {{ message }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="container py-4 text-secondary small border-top mt-4">
+  校园活动管理系统 · MVP
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

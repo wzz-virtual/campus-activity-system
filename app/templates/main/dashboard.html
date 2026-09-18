@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}工作台 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">工作台</h1>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-2">姓名</dt>
+      <dd class="col-sm-10">{{ current_user.name }}</dd>
+
+      <dt class="col-sm-2">账号</dt>
+      <dd class="col-sm-10">{{ current_user.student_no }}</dd>
+
+      <dt class="col-sm-2">角色</dt>
+      <dd class="col-sm-10">
+        <span class="badge text-bg-primary">{{ current_user.role_label }}</span>
+      </dd>
+
+      {% if current_user.is_club %}
+        <dt class="col-sm-2">所属社团</dt>
+        <dd class="col-sm-10">{{ current_user.club_name or "未填写" }}</dd>
+      {% endif %}
+    </dl>
+  </div>
+</div>
+
+{% if current_user.is_student %}
+  <div class="alert alert-info mb-0">
+    学生可以浏览活动、报名、签到，并查看自己报名的活动。
+  </div>
+{% elif current_user.is_club %}
+  <div class="alert alert-info mb-0">
+    社团可以创建活动并提交审核，在活动发布后管理报名名单与签到。
+    前往 <a href="{{ url_for('main.club_home') }}" class="alert-link">社团工作台</a>。
+  </div>
+{% elif current_user.is_admin %}
+  <div class="alert alert-info mb-0">
+    管理员可以直接发布活动，并审核社团提交的活动。
+    前往 <a href="{{ url_for('main.admin_home') }}" class="alert-link">管理后台</a>。
+  </div>
+{% endif %}
+{% endblock %}

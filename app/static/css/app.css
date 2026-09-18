@@ -1,0 +1,21 @@
+/* 项目自有样式。
+   Bootstrap 负责绝大部分排版，这里只放少量覆盖，保持文件小、易读。 */
+
+.navbar-brand {
+  letter-spacing: -0.2px;
+}
+
+/* 让卡片圆角与 Bootstrap 5 的默认值保持一致，避免各处手写 */
+.card {
+  border-color: #e4e7ec;
+}
+
+/* 表单里的必填标记 */
+.form-label .req {
+  color: #d92d20;
+}
+
+/* 表格在窄屏上横向滚动，而不是撑破布局 */
+.table-responsive-sm {
+  overflow-x: auto;
+}

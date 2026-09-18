@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}登录 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5 col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h1 class="h5 mb-1">登录</h1>
+        <p class="text-secondary small mb-4">用学号 / 工号登录</p>
+
+        <form method="post" novalidate>
+          {# CSRF 凭证：服务端会校验它，缺少或不匹配的 POST 一律拒绝。
+             没有这一行，第三方站点就能伪造一个登录请求。 #}
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+
+          <div class="mb-3">
+            <label for="student_no" class="form-label">学号 / 工号</label>
+            <input type="text" class="form-control" id="student_no" name="student_no"
+                   autocomplete="username" required autofocus>
+          </div>
+
+          <div class="mb-4">
+            <label for="password" class="form-label">密码</label>
+            <input type="password" class="form-control" id="password" name="password"
+                   autocomplete="current-password" required>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100">登录</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

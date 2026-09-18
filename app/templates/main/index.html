@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="p-4 mb-4 bg-white rounded-3 border">
+  <h1 class="h4 mb-2">校园活动管理系统</h1>
+  <p class="text-secondary mb-0">
+    发布活动、在线报名、现场签到、数据统计。
+  </p>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h6">活动列表</h2>
+        <p class="text-secondary small mb-0">
+          浏览与筛选活动，查看详情并报名。<span class="text-muted">（M3 实现）</span>
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h6">发布活动</h2>
+        <p class="text-secondary small mb-0">
+          社团提交后由校级管理员审核，管理员可直接发布。<span class="text-muted">（M1 实现）</span>
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h6">签到与统计</h2>
+        <p class="text-secondary small mb-0">
+          统计报名人数、实到人数与签到率。<span class="text-muted">（M4 实现）</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

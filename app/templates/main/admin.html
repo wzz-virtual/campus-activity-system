@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}管理后台 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">管理后台</h1>
+<p class="text-secondary small mb-4">
+  你以 <strong>{{ current_user.name }}</strong>（{{ current_user.role_label }}）身份登录。
+  此页面只有校级管理员可以访问。
+</p>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h2 class="h6">待审核活动</h2>
+    <p class="text-secondary small mb-0">
+      审核队列在 M2 里程碑实现。当前 M0 只验证「角色权限拦截」这一条链路是否生效：
+      学生与社团访问本页应当被拒绝。
+    </p>
+  </div>
+</div>
+
+<div class="card shadow-sm mt-3">
+  <div class="card-body">
+    <h2 class="h6">权限自检</h2>
+    <p class="text-secondary small mb-0">
+      如果页面能正常显示到这里，说明服务端已经确认你的角色是 <code>ADMIN</code>。
+      前端隐藏按钮不构成权限控制，真正的判断发生在这个视图执行之前。
+    </p>
+  </div>
+</div>
+{% endblock %}

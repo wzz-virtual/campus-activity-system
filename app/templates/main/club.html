@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}社团工作台 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">社团工作台</h1>
+<p class="text-secondary small mb-4">
+  你以 <strong>{{ current_user.name }}</strong>（{{ current_user.role_label }}）身份登录。
+  此页面只有社团角色可以访问。
+</p>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h2 class="h6">我的活动</h2>
+    <p class="text-secondary small mb-0">
+      活动创建、提交审核在 M1 里程碑实现。社团发布的活动必须先提交校级管理员审核，
+      通过后才会出现在活动广场。
+    </p>
+  </div>
+</div>
+
+<div class="card shadow-sm mt-3">
+  <div class="card-body">
+    <h2 class="h6">权限自检</h2>
+    <p class="text-secondary small mb-0">
+      如果页面能正常显示到这里，说明服务端已经确认你的角色是 <code>CLUB</code>。
+      注意：归属权校验（只能改自己创建的活动）是比角色校验更细的一层，
+      在 M1 引入活动实体后由 <code>owner_required</code> 负责。
+    </p>
+  </div>
+</div>
+{% endblock %}
