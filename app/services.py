@@ -37,6 +37,13 @@ from .timeutils import parse_local
 # 取 24 小时是「给组织者留出按名单备料的时间」与「给学生留出反悔空间」的折中。
 CANCEL_LOCK_WINDOW = timedelta(hours=24)
 
+# 界面上要写「不足 24 小时」，所以这里再给一个整小时数。
+# 别让界面把 24 这个数字硬编码一遍——改窗口时漏改一处，
+# 提示语就会和真实规则对不上，而这种错没人会主动去核对。
+CANCEL_LOCK_HOURS = int(CANCEL_LOCK_WINDOW.total_seconds() // 3600)
+
+CANCEL_LOCK_MESSAGE = f"距报名截止不足 {CANCEL_LOCK_HOURS} 小时，名单已锁定"
+
 # 签到码位数
 CHECK_IN_CODE_LENGTH = 6
 
@@ -507,7 +514,7 @@ def cancel_blocked_reason(activity, enrollment, now=None):
     if now >= activity.enroll_deadline:
         return "报名已截止，名单已锁定"
     if activity.enroll_deadline - now < CANCEL_LOCK_WINDOW:
-        return "距报名截止不足 24 小时，名单已锁定"
+        return CANCEL_LOCK_MESSAGE
     if activity.status != ActivityStatus.PUBLISHED:
         return "该活动尚未发布"
     return None

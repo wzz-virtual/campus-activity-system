@@ -40,7 +40,7 @@ from .models import (
 )
 from .permissions import owner_required, role_required
 from .services import (
-    CANCEL_LOCK_WINDOW,
+    CANCEL_LOCK_HOURS,
     CHECK_IN_STATE_LABELS,
     CHECK_IN_STATE_STYLES,
     activity_stats,
@@ -194,7 +194,6 @@ def list_activities():
         current_status=status,
         keyword=keyword,
         now=now,
-        cancel_lock_hours=int(CANCEL_LOCK_WINDOW.total_seconds() // 3600),
         status_labels=ActivityStatus.LABELS,
     )
 
@@ -588,6 +587,7 @@ def my_enrollments():
         rows=rows,
         state_labels=CHECK_IN_STATE_LABELS,
         state_styles=CHECK_IN_STATE_STYLES,
+        cancel_lock_hours=CANCEL_LOCK_HOURS,
     )
 
 
@@ -679,6 +679,12 @@ def activity_roster(activity_id):
     两条签到通道并存：组织者在名单上手动勾选（小活动最快），
     学生用 6 位签到码自助签到（几百人也不排队）。
     """
+    # 页面上的活动切换器在没有脚本时靠表单 GET 提交，这里把它转成一次跳转，
+    # 让地址栏始终是「某一场活动」的干净地址——刷新和分享都指向同一场活动。
+    switched = request.args.get("__switch", type=int)
+    if switched and switched != activity_id:
+        return redirect(url_for("activities.activity_roster", activity_id=switched))
+
     activity = get_activity_or_404(activity_id)
 
     enrollments = (

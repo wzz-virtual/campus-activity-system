@@ -13,11 +13,12 @@
     </p>
   </div>
 
-  {# 活动切换器：组织者不必退回列表再点进来 #}
+  {# 活动切换器：组织者不必退回列表再点进来。
+     有脚本时走 JS 直接跳转（地址栏保持干净的「某一场活动」地址）；
+     没有脚本时靠 noscript 里的「切换」按钮提交表单，#}
   {% if siblings|length > 1 %}
     <form class="d-flex gap-2" method="get"
-          action="{{ url_for('activities.activity_roster', activity_id=activity.id) }}"
-          onchange="this.submit()">
+          action="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">
       <select class="form-select form-select-sm" name="__switch">
         {% for item in siblings %}
           <option value="{{ item.id }}" {{ 'selected' if item.id == activity.id }}
@@ -28,17 +29,6 @@
       </select>
       <noscript><button class="btn btn-sm btn-outline-secondary">切换</button></noscript>
     </form>
-    {# 用纯链接兜底：脚本被禁用时下拉框也能用 #}
-    <div class="d-none d-md-flex flex-wrap gap-1">
-      {% for item in siblings %}
-        {% if item.id != activity.id %}
-          <a class="btn btn-sm btn-outline-secondary"
-             href="{{ url_for('activities.activity_roster', activity_id=item.id) }}">
-            {{ item.title|truncate(12) }}
-          </a>
-        {% endif %}
-      {% endfor %}
-    </div>
   {% endif %}
 </div>
 

@@ -11,7 +11,9 @@
 <div class="alert alert-light border small">
   <strong>取消报名规则</strong>
   <ul class="mb-0 ps-3">
-    <li>距报名截止<b>不足 24 小时</b>起，名单锁定，不可再取消；</li>
+    {# 小时数来自后端的 CANCEL_LOCK_HOURS，不在模板里硬编码：
+       改窗口时漏改一处，提示语就会和真实规则对不上 #}
+    <li>距报名截止<b>不足 {{ cancel_lock_hours }} 小时</b>起，名单锁定，不可再取消；</li>
     <li>报名截止之后同样不可取消；</li>
     <li>活动开始后不可取消；</li>
     <li>已签到的报名不可取消。</li>
