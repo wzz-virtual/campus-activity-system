@@ -449,8 +449,23 @@ python -m venv .venv
 .venv\Scripts\python.exe -m flask --app run:app seed-demo
 ```
 
-> `seed-demo` 只用于初始化**空库**，库里已有用户时会直接报错退出，
-> 以免把真实数据盖掉。想重新播种就换一个数据库文件。
+> `seed-demo` 只用于初始化**空库**。库里已有用户时会报错退出，以免把真实数据盖掉；
+> 确实要重播就加 `--reset`。
+
+### 12.1.1 演示数据有「保质期」，过期了就重播一次
+
+演示数据里所有时间都是**相对播种那一刻**算出来的：报名截止 +2 天、进行中的活动
++6 小时……所以它只新鲜一阵子。放久了会看到整页都是「已结束」「报名已截止」——
+看着像功能坏了，其实是数据过期了。
+
+一条命令重播（会清空现有数据）：
+
+```bat
+.venv\Scripts\python.exe -m flask --app run:app seed-demo --reset
+```
+
+最要紧的是那场「进行中」的活动（书法体验课）：演示数据里只有它一场是进行中，
+「凭签到码签到」整条路径都靠它；它一过期，签到页就只剩一句「活动已结束」。
 
 ### 12.2 启动
 
@@ -458,7 +473,21 @@ python -m venv .venv
 .venv\Scripts\python.exe run.py
 ```
 
-打开 <http://127.0.0.1:5000>。演示数据里所有账号的密码都是 `Campus-Demo-2026`：
+打开 <http://127.0.0.1:5000>。这条命令带自动重载，改完代码存盘就生效，**写代码时用这条**。
+
+只想打开页面看看、不想占着一个终端窗口的话，用后台启动器：
+
+```bat
+.venv\Scripts\python.exe tools\serve.py start    :: 挂到后台，关掉终端也照跑
+.venv\Scripts\python.exe tools\serve.py status   :: 看还在不在
+.venv\Scripts\python.exe tools\serve.py stop     :: 停掉
+```
+
+它和 `run.py` 的差别：关掉 DEBUG（不留一个带交互式调试控制台的进程在后台）、
+关掉自动重载（单进程，按 PID 停一个就够）、日志与 PID 文件写在系统临时目录
+（不会被重载器监视，也不污染仓库）。
+
+演示数据里所有账号的密码都是 `Campus-Demo-2026`：
 
 | 账号 | 姓名 | 角色 | 用途 |
 | --- | --- | --- | --- |
@@ -484,8 +513,13 @@ python -m venv .venv
 
 ### 12.4 换数据库 / 清空重来
 
-数据库默认落在 `instance/campus.db`。想从零开始，删掉这个文件再跑一次
-`init-db` + `seed-demo` 即可。用 `DATABASE_URL` 环境变量可以指定别的库：
+数据库默认落在 `instance/campus.db`。想从零开始，最省事的是：
+
+```bat
+.venv\Scripts\python.exe -m flask --app run:app seed-demo --reset
+```
+
+要连数据库文件一起换掉，用 `DATABASE_URL` 环境变量指定别的库：
 
 ```bat
 set DATABASE_URL=sqlite:///D:/data/campus.db
