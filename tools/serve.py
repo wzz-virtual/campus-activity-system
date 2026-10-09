@@ -144,6 +144,8 @@ def start():
     if pid and process_alive(pid):
         print(f"已经在跑了：PID {pid}  http://{HOST}:{PORT}")
         print(f"日志：{LOG_PATH}")
+        print()
+        print("停止方式：双击项目根目录下的「停止系统.bat」。")
         return 0
     if port_open():
         print(f"端口 {PORT} 已被别的进程占用，先确认它是不是你之前开的：")
@@ -176,6 +178,13 @@ def start():
             print(f"已启动：PID {child.pid}")
             print(f"地址：http://{HOST}:{PORT}")
             print(f"日志：{LOG_PATH}")
+            print()
+            # 这段提示放在 Python 里而不是批处理里：cmd.exe 在 UTF-8 代码页下
+            # 读批处理文件会出现多字节字符错位，而且**不是每一行都出问题**
+            # （同一份文件里别的中文行显示正常，偏偏某一行被当成命令去执行），
+            # 排查起来非常费劲。批处理保持纯 ASCII，中文一律由 Python 输出。
+            print("提示：服务在后台运行，关掉这个窗口不影响它。")
+            print("     停止方式：双击项目根目录下的「停止系统.bat」。")
             return 0
         time.sleep(0.5)
 

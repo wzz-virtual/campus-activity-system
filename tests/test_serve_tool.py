@@ -200,6 +200,57 @@ def test_start_is_idempotent_when_already_running(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# 双击启动的批处理
+# ---------------------------------------------------------------------------
+
+BAT_FILES = ("启动系统.bat", "停止系统.bat")
+
+
+@pytest.mark.parametrize("name", BAT_FILES)
+def test_launchers_exist_and_call_the_serve_tool(name):
+    path = os.path.join(serve.ROOT, name)
+    assert os.path.isfile(path), f"{name} 不见了；双击启动这条路就断了"
+
+    text = open(path, "rb").read().decode("ascii")
+    assert "tools" in text and "serve.py" in text
+
+
+@pytest.mark.parametrize("name", BAT_FILES)
+def test_launchers_are_crlf_only(name):
+    """批处理必须用 CRLF 行尾。
+
+    只有 LF 时 cmd.exe 会把相邻各行粘在一起解析，整个脚本直接崩，
+    报一串「'xxx' 不是内部或外部命令」——看起来像路径写错了，
+    实际是行尾的问题。
+    """
+    raw = open(os.path.join(serve.ROOT, name), "rb").read()
+
+    assert b"\r\n" in raw
+    assert raw.count(b"\n") == raw.count(b"\r\n"), (
+        f"{name} 里存在只有 LF 的行尾，cmd.exe 会解析错乱"
+    )
+
+
+@pytest.mark.parametrize("name", BAT_FILES)
+def test_launchers_contain_no_multibyte_characters(name):
+    """批处理里不能出现任何非 ASCII 字节。
+
+    ``chcp 65001`` 下 cmd.exe 读批处理会出现多字节字符错位，而且**不是每行都
+    出问题**：同一份文件里别的中文行显示正常，偏偏某一行被当成命令去执行
+    （实测报 ``'��停止系统.bat」。' is not recognized ...``）。
+    这种「部分正常」最难查，所以干脆把中文全部交给 Python 输出，
+    批处理只保留 ASCII 的调度逻辑。
+    """
+    raw = open(os.path.join(serve.ROOT, name), "rb").read()
+
+    offenders = [(index, byte) for index, byte in enumerate(raw) if byte > 127]
+    assert not offenders, (
+        f"{name} 里有非 ASCII 字节（位置 {offenders[:3]}）；"
+        "中文提示请放到 tools/serve.py 里输出"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 状态文件的位置
 # ---------------------------------------------------------------------------
 
