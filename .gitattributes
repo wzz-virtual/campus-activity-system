@@ -1,0 +1,11 @@
+# 行尾约定：让「工作区里是什么行尾」不依赖每个人本机的 core.autocrlf 设置。
+#
+# 背景：本仓库的 core.autocrlf = true，Git 会把文本文件在仓库里统一存成 LF、
+# 检出时再按平台转换。对 .bat 来说这很危险——只要对方的环境（CI、Linux、
+# 或手动设了 autocrlf=false 的机器）拿到 LF 版本的批处理，cmd.exe 就会把相邻
+# 各行粘在一起解析，脚本直接崩，报一串「'xxx' 不是内部或外部命令」，
+# 看起来像路径写错了。
+#
+# 所以对批处理显式声明 eol=crlf：仓库里仍存 LF，但**任何环境检出时都还原成 CRLF**。
+*.bat text eol=crlf
+*.cmd text eol=crlf

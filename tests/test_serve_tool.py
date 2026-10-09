@@ -255,6 +255,30 @@ def test_launchers_contain_no_multibyte_characters(name):
 # ---------------------------------------------------------------------------
 
 
+def test_gitattributes_pins_batch_files_to_crlf():
+    """批处理的行尾不能依赖每个人本机的 core.autocrlf。
+
+    本仓库的 core.autocrlf = true：Git 会把文本内容在仓库里统一存成 LF、
+    检出时再按平台转回 CRLF。只靠这个设置是不够的——换一个环境
+    （CI、Linux、或者手动设了 autocrlf=false 的机器）拿到的就是 LF 版本的
+    批处理，双击直接崩。所以在 .gitattributes 里显式声明 *.bat 的 eol=crlf，
+    让任何环境检出都还原成 CRLF。
+    """
+    path = os.path.join(serve.ROOT, ".gitattributes")
+    assert os.path.isfile(path), "缺少 .gitattributes，批处理的行尾没有保证"
+
+    with open(path, encoding="utf-8") as handle:
+        rules = [
+            line.strip()
+            for line in handle
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+    assert any(
+        rule.startswith("*.bat") and "eol=crlf" in rule for rule in rules
+    ), f".gitattributes 里没有 *.bat 的 eol=crlf 规则：{rules}"
+
+
 def test_state_files_default_to_outside_the_project(isolate_state_files):
     """日志与 PID 文件默认必须在项目之外。
 
