@@ -150,9 +150,42 @@ def test_seed_refuses_to_run_twice(app):
     second = runner.invoke(args=["seed-demo"])
     assert second.exit_code != 0
     assert "已经有用户" in second.output
+    assert "--reset" in second.output, "报错里要给出重播的办法"
 
     with app.app_context():
         assert count(Activity) == ACTIVITY_COUNT
+
+
+def test_seed_reset_rebuilds_the_dataset(app):
+    """``--reset`` 先清空再重播。
+
+    演示数据的时间是按「相对播种那一刻」算的，放着不动会逐天过期；
+    过期之后页面上只剩「已结束」「报名已截止」，看着像功能坏了。
+    所以要有一个一键重播的入口，而不是让人手动删数据库文件。
+    """
+    runner = app.test_cli_runner()
+    assert runner.invoke(args=["seed-demo"]).exit_code == 0
+
+    with app.app_context():
+        # 人为破坏：删掉全部活动，模拟「数据被改乱了」或「放太久过期了」
+        _db.session.execute(_db.delete(Activity))
+        _db.session.execute(_db.delete(Enrollment))
+        _db.session.commit()
+        assert count(Activity) == 0
+
+    result = runner.invoke(args=["seed-demo", "--reset"])
+    assert result.exit_code == 0, result.output
+    assert "已清空全部数据表" in result.output
+
+    with app.app_context():
+        assert count(Activity) == ACTIVITY_COUNT
+        assert count(Category) == 4
+        # 重播之后，「进行中」的那场必须回来了——签到演示全靠它
+        ongoing = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.ONGOING)
+        ).scalar_one()
+        assert ongoing.check_in_code and len(ongoing.check_in_code) == 6
+        assert ongoing.end_time - utcnow() >= timedelta(hours=2)
 
 
 def test_seeded_admin_audit_queue_is_noisy_enough_to_be_useful(app, client, login):

@@ -235,9 +235,24 @@ def create_app(config_name=None, **overrides):
         print("数据库表已创建")
 
     @app.cli.command("seed-demo")
-    def seed_demo():
+    @click.option(
+        "--reset",
+        is_flag=True,
+        help="先清空全部数据表再重新播种。演示数据是按「相对当前时间」生成的，"
+        "放着不动会逐天过期，过一阵子重播一次即可。",
+    )
+    def seed_demo(reset):
         """写入演示数据：分类、三个角色的账号、覆盖全部状态的活动与报名记录。"""
         from .seed import DEMO_ACCOUNTS, DEMO_PASSWORD, seed_demo_data
+
+        if reset:
+            # 演示数据里的活动时间都是「相对播种那一刻」算出来的：
+            # 报名截止 +2 天、进行中的活动 +6 小时……放着不动就会逐天过期，
+            # 过期之后页面上只剩「已结束」「报名已截止」，看着像功能坏了。
+            # 所以给一个一键重播的入口，而不是让人手动去删数据库文件。
+            db.drop_all()
+            db.create_all()
+            print("已清空全部数据表")
 
         try:
             summary = seed_demo_data()

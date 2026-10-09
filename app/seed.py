@@ -70,7 +70,7 @@ def seed_demo_data():
     if db.session.execute(db.select(db.func.count()).select_from(User)).scalar_one():
         raise RuntimeError(
             "数据库里已经有用户了。演示数据只用于初始化空库，"
-            "请先换一个干净的数据库文件再执行。"
+            "不会覆盖已有数据；确实要重播，请加 --reset。"
         )
 
     now = utcnow()
