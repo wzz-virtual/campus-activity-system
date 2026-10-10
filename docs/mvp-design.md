@@ -553,3 +553,37 @@ set FLASK_CONFIG=prod
 缺 `SECRET_KEY`、密钥过短或用了开发占位值时，应用会**直接拒绝启动**——
 带病启动比启动失败危险得多。
 
+## 13. 发布到线上
+
+`deploy.py` 是这个项目**唯一**为「挂到公网上跑」准备的入口。它和 `run.py`
+的差别都是环境逼出来的：
+
+| 要求 | 为什么 |
+| --- | --- |
+| 绑定 `0.0.0.0`、端口读环境变量 `PORT` | 发布沙箱只给一个 HTTP 端口，并注入 `PORT`。只监听回环地址的话反向代理连不上 |
+| `FLASK_CONFIG=prod`（DEBUG 关闭） | 开发配置会打开 Werkzeug 的交互式调试控制台，**放在公网上等于把任意代码执行能力开放给所有人** |
+| 启动时自动建表 + 空库播种 | 沙箱里没有运维去跑 `init-db` / `seed-demo` |
+| 数据库落在 `instance/live.db` | 和本地开发的 `campus.db` 分开：线上不会被本地那份旧数据污染，本地调试也不会误改线上 |
+
+```bat
+python deploy.py                          :: 本地模拟
+PORT=8080 python deploy.py                :: 线上由沙箱注入 PORT
+SESSION_COOKIE_SECURE=0 python deploy.py  :: 站点确认是按 HTTP 访问时才加
+```
+
+**关于 `SESSION_COOKIE_SECURE`**：生产配置默认把 session Cookie 标成 Secure
+（只允许 HTTPS 传输）。如果站点实际是按 HTTP 访问的，浏览器和任何客户端都
+**不会回传**这个 Cookie，session 直接丢——表现出来是「一提交登录就 400
+BAD REQUEST」（CSRF token 对不上）。这个现象和「密码错了」「CSRF 配置错了」
+长得几乎一样，很容易查偏方向，所以留了个显式开关。
+
+**三条必须知道的限制**：
+
+1. **演示账号的密码是公开的**（`Campus-Demo-2026`），而线上是公开地址——
+   任何人都能用 `admin` 登录并改动数据。所以站点里**只能放演示数据**，
+   绝不能放真实的学生信息。
+2. **用的是 Flask 自带的开发服务器**。课程演示够用，但它不是为公网设计的；
+   真要长期对外服务，应换成 waitress / gunicorn。
+3. **SECRET_KEY 每次启动随机生成**，意味着重启后所有人的登录会话一起失效。
+   真实部署必须从环境变量注入一个固定密钥。
+
