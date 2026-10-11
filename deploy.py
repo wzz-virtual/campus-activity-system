@@ -40,9 +40,14 @@ def configure_environment():
     """
     os.environ.setdefault("FLASK_CONFIG", "prod")
     os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
+    # V2.0 起库文件叫 live-v2.db（不再是 live.db）。
+    # 原因：沙箱里可能躺着一个 V1.0 的老库，启动时的迁移只会"翻译"它
+    # （CLUB→TEACHER 等），不会补上候补队列、待审核申请这些 V2.0 的演示场景——
+    # 换一个新文件名，让沙箱开出来就是一份完整的 V2.0 演示数据。
+    # 之后库文件保持不动，重启 / 重新发布都不会清掉访问者产生的数据。
     os.environ.setdefault(
         "DATABASE_URL",
-        "sqlite:///" + os.path.join(BASE_DIR, "instance", "live.db").replace("\\", "/"),
+        "sqlite:///" + os.path.join(BASE_DIR, "instance", "live-v2.db").replace("\\", "/"),
     )
 
 

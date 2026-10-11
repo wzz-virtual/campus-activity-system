@@ -266,13 +266,15 @@ def test_deploy_points_at_its_own_database_file(clean_deploy_env):
     """线上库必须是独立文件，不能和本地开发库共用。
 
     共用的话，线上会被本地那份「放了几天的旧数据」污染，本地调试也会误改线上数据。
+    V2.0 起文件名换成 live-v2.db：沙箱里可能躺着 V1.0 的老库，换名可以让线上
+    开出完整的 V2.0 演示数据（迁移只翻译旧数据，不补候补 / 待审核这些演示场景）。
     """
     import deploy
 
     deploy.configure_environment()
     url = os.environ["DATABASE_URL"].replace("\\", "/")
 
-    assert "instance/live.db" in url
+    assert "instance/live-v2.db" in url
     assert "campus.db" not in url, "线上不能指向本地开发用的 campus.db"
 
 
