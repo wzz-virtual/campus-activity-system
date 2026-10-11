@@ -10,6 +10,7 @@
     <p class="text-secondary small mb-0">
       <a class="link-secondary" href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">{{ activity.title }}</a>
       · {{ m.status_badge(activity) }}
+      {% if activity.requires_review %}<span class="badge text-bg-info">需审核</span>{% endif %}
     </p>
   </div>
 
@@ -23,7 +24,7 @@
         {% for item in siblings %}
           <option value="{{ item.id }}" {{ 'selected' if item.id == activity.id }}
                   data-href="{{ url_for('activities.activity_roster', activity_id=item.id) }}">
-            {{ item.title }}（{{ item.status_label }}）
+            {{ item.title }}（{{ item.status_label }}）{% if item.status == 'PUBLISHED' and item.requires_review %} · 需审核{% endif %}
           </option>
         {% endfor %}
       </select>
@@ -32,29 +33,30 @@
   {% endif %}
 </div>
 
+{# ---- 人数视图（FR-3.2）：上限 / 正式 / 候补 / 余位，一眼看清 ---- #}
 <div class="row g-3 mb-3">
   <div class="col-6 col-md-3">
     <div class="card h-100"><div class="card-body text-center">
-      <div class="h4 mb-0">{{ stats.enrolled }}<span class="fs-6 text-secondary"> / {{ stats.capacity }}</span></div>
-      <div class="small text-secondary">报名人数</div>
+      <div class="h4 mb-0">{{ stats.capacity }}</div>
+      <div class="small text-secondary">人数上限</div>
     </div></div>
   </div>
   <div class="col-6 col-md-3">
     <div class="card h-100"><div class="card-body text-center">
-      <div class="h4 mb-0">{{ stats.checked_in }}</div>
-      <div class="small text-secondary">实到人数</div>
+      <div class="h4 mb-0">{{ stats.enrolled }}</div>
+      <div class="small text-secondary">正式人数</div>
     </div></div>
   </div>
   <div class="col-6 col-md-3">
     <div class="card h-100"><div class="card-body text-center">
-      <div class="h4 mb-0">{{ stats.check_in_rate }}%</div>
-      <div class="small text-secondary">签到率（实到 ÷ 报名）</div>
+      <div class="h4 mb-0">{{ stats.waitlisted }}</div>
+      <div class="small text-secondary">候补人数</div>
     </div></div>
   </div>
   <div class="col-6 col-md-3">
     <div class="card h-100"><div class="card-body text-center">
-      <div class="h4 mb-0">{{ stats.fill_rate }}%</div>
-      <div class="small text-secondary">上座率（报名 ÷ 上限）</div>
+      <div class="h4 mb-0">{{ stats.remaining }}</div>
+      <div class="small text-secondary">剩余名额</div>
     </div></div>
   </div>
 </div>
@@ -71,11 +73,11 @@
         把它投在屏幕上或写在门口，学生在活动详情页输入即可自助签到。
         活动结束后签到码自动失效。
       </p>
-    {% elif activity.status == 'PENDING' or activity.status == 'DRAFT' or activity.status == 'REJECTED' %}
+    {% elif activity.status in ['DRAFT', 'OFFLINE'] %}
       <p class="small text-secondary mb-0">
-        活动尚未发布，还不能开启签到。
+        活动{{ '已被下线' if activity.status == 'OFFLINE' else '尚未发布' }}，还不能开启签到。
       </p>
-    {% elif activity.status == 'FINISHED' or activity.status == 'CANCELED' %}
+    {% elif activity.status in ['FINISHED', 'CANCELED'] %}
       <p class="small text-secondary mb-0">
         活动已{{ '结束' if activity.status == 'FINISHED' else '取消' }}，签到通道已关闭。
       </p>
@@ -92,10 +94,71 @@
   </div>
 </div>
 
-<div class="card">
+{# ---- 待审核的报名申请（仅"需审核"的活动会出现） ---- #}
+{% if pending or activity.requires_review %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">
+        待审核申请（{{ pending|length }}）
+        {% if activity.qualification %}
+          <span class="small fw-normal text-secondary ms-2">资格：{{ activity.qualification }}</span>
+        {% endif %}
+      </h2>
+
+      {% if not pending %}
+        <p class="text-secondary small mb-0">没有等待处理的申请。</p>
+      {% else %}
+        <p class="small text-secondary">
+          通过的是<b>资格</b>，不是名额：通过时还有余位才转「正式」，没有余位会自动排进候补队列。
+        </p>
+        <div class="table-responsive-sm">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th style="width:52px">#</th>
+                <th>学号</th>
+                <th>姓名</th>
+                <th style="width:170px">申请时间</th>
+                <th style="width:170px" class="text-end">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for enrollment in pending %}
+              <tr>
+                <td class="text-secondary small">{{ loop.index }}</td>
+                <td>{{ enrollment.user.student_no }}</td>
+                <td>{{ enrollment.user.name }}</td>
+                <td class="small">{{ enrollment.enrolled_at|localtime('%Y-%m-%d %H:%M') }}</td>
+                <td class="text-end">
+                  <div class="d-inline-flex gap-2">
+                    <form method="post"
+                          action="{{ url_for('activities.approve_enrollment', activity_id=activity.id, user_id=enrollment.user_id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-success" type="submit">通过</button>
+                    </form>
+                    <form method="post"
+                          action="{{ url_for('activities.reject_enrollment', activity_id=activity.id, user_id=enrollment.user_id) }}"
+                          onsubmit="return confirm('拒绝后该学生不能参加本次活动，且不会进入候补。确定吗？');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-outline-danger" type="submit">拒绝</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+{# ---- 正式名单 ---- #}
+<div class="card mb-3">
   <div class="card-body">
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-      <h2 class="h6 mb-0">报名名单（{{ stats.enrolled }} 人）</h2>
+      <h2 class="h6 mb-0">正式名单（{{ confirmed|length }} 人）</h2>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary"
            href="{{ url_for('activities.export_enrollments', activity_id=activity.id) }}">导出 CSV</a>
@@ -104,8 +167,8 @@
       </div>
     </div>
 
-    {% if not enrollments %}
-      <p class="text-secondary small mb-0">还没有人报名。</p>
+    {% if not confirmed %}
+      <p class="text-secondary small mb-0">还没有正式报名的人。</p>
     {% else %}
       {% if activity.status != 'ONGOING' %}
         <div class="alert alert-light border small py-2">
@@ -126,7 +189,7 @@
             </tr>
           </thead>
           <tbody>
-          {% for enrollment in enrollments %}
+          {% for enrollment in confirmed %}
             <tr>
               <td class="text-secondary small">{{ loop.index }}</td>
               <td>{{ enrollment.user.student_no }}</td>
@@ -160,6 +223,44 @@
                   <span class="small text-secondary">—</span>
                 {% endif %}
               </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ---- 候补队列：严格按进入候补的时间排序，不能人工调整 ---- #}
+<div class="card">
+  <div class="card-body">
+    <h2 class="h6 mb-3">候补队列（{{ waitlisted|length }} 人）</h2>
+
+    {% if not waitlisted %}
+      <p class="text-secondary small mb-0">候补队列是空的。</p>
+    {% else %}
+      <p class="small text-secondary">
+        顺序 = 进入候补的时间先后（先到先得）。名额空出时<b>队首自动转为正式</b>，
+        队列里其他人依次前移；系统不提供任何人工调整顺序的入口。
+      </p>
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width:52px">排位</th>
+              <th>学号</th>
+              <th>姓名</th>
+              <th style="width:200px">进入候补时间</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for enrollment in waitlisted %}
+            <tr>
+              <td><span class="badge text-bg-warning">第 {{ loop.index }} 位</span></td>
+              <td>{{ enrollment.user.student_no }}</td>
+              <td>{{ enrollment.user.name }}</td>
+              <td class="small">{{ enrollment.waitlisted_at|localtime('%Y-%m-%d %H:%M') }}</td>
             </tr>
           {% endfor %}
           </tbody>

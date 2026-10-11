@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 {% import "activities/_macros.html" as m %}
 
-{% block title %}全部活动 · 校园活动管理系统{% endblock %}
+{% block title %}活动监督 · 校园活动管理系统{% endblock %}
 
 {% block content %}
-<h1 class="h4 mb-1">全部活动</h1>
-<p class="text-secondary small mb-4">按状态筛选，必要时强制取消。</p>
+<h1 class="h4 mb-1">活动监督</h1>
+<p class="text-secondary small mb-4">
+  查看平台全部活动，对违规或明显错误的活动做状态处理（下线 / 恢复展示）。
+  <b>不代替教师编辑活动内容，也不介入具体报名</b>——那是组织教师自己的职责。
+</p>
 
 <form class="card mb-3" method="get" action="{{ url_for('admin.all_activities') }}">
   <div class="card-body">
@@ -18,9 +21,9 @@
         <label class="form-label small" for="f-status">状态</label>
         <select class="form-select form-select-sm" id="f-status" name="status">
           <option value="">全部状态</option>
-          {% for value in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'] %}
+          {% for value in ['DRAFT', 'PUBLISHED', 'ONGOING', 'FINISHED', 'OFFLINE', 'CANCELED'] %}
             <option value="{{ value }}" {{ 'selected' if current_status == value }}>
-              {{ m.STATUS_LABELS.get(value, value) }}
+              {{ status_labels.get(value, value) }}
             </option>
           {% endfor %}
         </select>
@@ -40,14 +43,15 @@
         <tr>
           <th>活动</th>
           <th style="width:100px">状态</th>
-          <th style="width:150px">组织者</th>
-          <th style="width:170px">时间</th>
-          <th style="width:90px" class="text-end">报名</th>
-          <th style="width:200px" class="text-end">操作</th>
+          <th style="width:130px">组织教师</th>
+          <th style="width:150px">时间</th>
+          <th style="width:90px" class="text-end">正式/上限</th>
+          <th style="width:250px" class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
       {% for activity in activities %}
+        {% set record = offline_records.get(activity.id) %}
         <tr>
           <td>
             <a class="link-dark text-decoration-none"
@@ -55,6 +59,14 @@
               {{ activity.title }}
             </a>
             <div class="small text-secondary">{{ activity.location }}</div>
+            {% if record %}
+              {# 处理标记：谁、什么时候、为什么（TC-14） #}
+              <div class="small text-danger">
+                下线处理：{{ record.reason or '（未填写原因）' }}
+                <span class="text-secondary">（{{ record.operator.name }} ·
+                  {{ record.created_at|localtime('%Y-%m-%d %H:%M') }}）</span>
+              </div>
+            {% endif %}
           </td>
           <td>{{ m.status_badge(activity) }}</td>
           <td class="small">
@@ -66,18 +78,28 @@
           <td class="small">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</td>
           <td class="text-end small">{{ activity.enrolled_count }} / {{ activity.capacity }}</td>
           <td class="text-end">
-            <div class="d-inline-flex gap-1">
+            <div class="d-inline-flex align-items-center gap-1">
               <a class="btn btn-sm btn-outline-secondary"
-                 href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单</a>
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">统计</a>
-              {% if activity.status in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING'] %}
-                <form method="post"
-                      action="{{ url_for('activities.cancel_activity', activity_id=activity.id) }}"
-                      onsubmit="return confirm('强制取消「{{ activity.title }}」？已报名的记录会保留。');">
+                 href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看</a>
+
+              {% if activity.status in offinable_statuses %}
+                <form class="d-inline-flex align-items-center gap-1" method="post"
+                      action="{{ url_for('admin.offline_activity', activity_id=activity.id) }}"
+                      onsubmit="return confirm('下线「{{ activity.title }}」？学生端将不再展示。');">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button class="btn btn-sm btn-outline-danger" type="submit">强制取消</button>
+                  <input class="form-control form-control-sm" style="width:110px" name="reason"
+                         maxlength="255" placeholder="下线原因（可选）">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">下线</button>
                 </form>
+              {% elif activity.status == 'OFFLINE' %}
+                <form class="d-inline" method="post"
+                      action="{{ url_for('admin.restore_activity', activity_id=activity.id) }}"
+                      onsubmit="return confirm('恢复「{{ activity.title }}」的展示？');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-success" type="submit">恢复</button>
+                </form>
+              {% else %}
+                <span class="small text-secondary">—</span>
               {% endif %}
             </div>
           </td>

@@ -24,12 +24,7 @@
 <h1 class="h4 mb-1">{{ '新建活动' if is_new else '编辑活动' }}</h1>
 <p class="text-secondary small mb-4">
   {% if is_new %}
-    {% if current_user.is_admin %}
-      管理员创建的活动<b>跳过审核、直接发布</b>，学生立刻就能看到。
-    {% else %}
-      社团创建的活动会进入<b>待审核</b>队列，管理员通过后才会出现在活动广场。
-      暂时不想提交的可以先存草稿。
-    {% endif %}
+    发布后学生立刻能在活动广场看到并报名；暂时不发布的可以先存草稿。
   {% else %}
     当前状态：<span class="badge text-bg-light border">{{ activity.status_label }}</span>
   {% endif %}
@@ -128,18 +123,43 @@
     </div>
   </div>
 
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">报名方式</h2>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" id="f-review" name="requires_review"
+               value="1" {{ 'checked' if raw.requires_review }}>
+        <label class="form-check-label" for="f-review">
+          需要审核报名
+        </label>
+        <div class="form-text">
+          勾选后：学生报名先进入「待审核」，由你逐人确认。
+          <b>通过不等于一定参加</b>——通过时还有余位才转为「正式」，没有余位就排入候补队列。
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <label class="form-label" for="f-qualification">参加资格说明</label>
+        <textarea class="form-control{{ invalid('qualification') }}" id="f-qualification"
+                  name="qualification" rows="2" maxlength="255"
+                  placeholder="例如：面向全体在校学生；需自备相机或可拍照的手机。">{{ raw.qualification }}</textarea>
+        {{ field_error('qualification') }}
+        <div class="form-text">勾选「需要审核」时必填——你审的就是资格，学生也要先看到它。</div>
+      </div>
+    </div>
+  </div>
+
   <div class="d-flex flex-wrap gap-2">
-    {% if is_new and current_user.is_club %}
-      <button class="btn btn-primary" type="submit" name="action" value="submit">提交审核</button>
+    {% if is_new %}
+      <button class="btn btn-primary" type="submit" name="action" value="publish">发布活动</button>
       {# 表单用同一个按钮名区分两种提交方式，服务端读 action 的值决定落到哪个状态 #}
       <button class="btn btn-outline-secondary" type="submit" name="action" value="draft">存草稿</button>
-    {% elif is_new %}
-      <button class="btn btn-primary" type="submit" name="action" value="submit">直接发布</button>
     {% else %}
       <button class="btn btn-primary" type="submit">保存修改</button>
     {% endif %}
     <a class="btn btn-outline-secondary"
-       href="{{ url_for('activities.my_activities') if not is_new and current_user.is_club else url_for('activities.list_activities') }}">取消</a>
+       href="{{ url_for('activities.my_activities') if not is_new else url_for('activities.list_activities') }}">取消</a>
   </div>
 </form>
 {% endblock %}

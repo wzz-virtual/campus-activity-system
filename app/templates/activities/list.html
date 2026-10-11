@@ -11,7 +11,7 @@
       共 {{ pagination.total }} 场活动，第 {{ pagination.page }} / {{ pagination.pages or 1 }} 页
     </p>
   </div>
-  {% if current_user.is_authenticated and (current_user.is_club or current_user.is_admin) %}
+  {% if current_user.is_authenticated and current_user.is_teacher %}
     <a class="btn btn-sm btn-primary" href="{{ url_for('activities.new_activity') }}">发布活动</a>
   {% endif %}
 </div>
@@ -75,7 +75,12 @@
                 {{ activity.title }}
               </a>
             </h2>
-            {{ m.status_badge(activity) }}
+            <div class="d-flex align-items-center gap-1">
+              {% if activity.requires_review %}
+                <span class="badge text-bg-info">需审核</span>
+              {% endif %}
+              {{ m.status_badge(activity) }}
+            </div>
           </div>
 
           <div class="small text-secondary mb-2">
@@ -89,25 +94,19 @@
           {% endif %}
 
           <div class="small mb-3">
-            {# 决策所需的信息直接摆在卡片上：还剩多少名额、报名有没有截止。
-               不要让学生点进去才发现报不上。
+            {# 决策所需的信息直接摆在卡片上：还能不能报名、是"可报名"还是
+               "已满员·可候补"、报名有没有截止。不要让学生点进去才发现报不上。
 
-               分隔符必须跟着后一段一起出：enroll_closed_note 在「已发布且还没到
-               截止时间」时什么都不输出，这时如果无条件渲染「·」，卡片上就会挂着
-               一个孤零零的点号。而这恰恰是最常见的情况——每一个还能报名的活动
-               都会这样显示。 #}
-            {% set closed_note = m.enroll_closed_note(activity, now) %}
-            {{ m.quota_text(activity) }}{% if closed_note %}
-              <span class="text-secondary mx-1">·</span>{{ closed_note }}
-            {%- endif %}
+               这一行由 enroll_line 宏统一渲染，保证**永远有内容**——
+               之前这里把「剩余名额」和「截止提示」拼在一起、分隔符无条件渲染，
+               结果是每个还能报名的活动卡上都挂着一个孤零零的「·」。 #}
+            {{ m.enroll_line(activity, now) }}
           </div>
 
           <div class="mt-auto d-flex align-items-center gap-2">
             <a class="btn btn-sm btn-outline-primary"
                href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看详情</a>
-            {% if mine and mine.status == 'ENROLLED' %}
-              <span class="badge text-bg-primary">你已报名</span>
-            {% endif %}
+            {{ m.my_enroll_badge(mine, waitlist_positions.get(activity.id) if waitlist_positions else None) }}
           </div>
         </div>
       </div>

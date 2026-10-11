@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "activities/_macros.html" as m %}
 
 {% block title %}工作台 · 校园活动管理系统{% endblock %}
 
@@ -19,8 +20,8 @@
         <span class="badge text-bg-primary">{{ current_user.role_label }}</span>
       </dd>
 
-      {% if current_user.is_club %}
-        <dt class="col-sm-2">所属社团</dt>
+      {% if current_user.is_teacher %}
+        <dt class="col-sm-2">所属组织</dt>
         <dd class="col-sm-10">{{ current_user.club_name or "未填写" }}</dd>
       {% endif %}
     </dl>
@@ -32,8 +33,10 @@
     <div class="col-md-6">
       <div class="card h-100">
         <div class="card-body">
-          <h2 class="h6 mb-2">找活动、报名</h2>
-          <p class="text-secondary small mb-3">浏览、筛选、搜索活动，报名后名额立刻变化。</p>
+          <h2 class="h6 mb-2">找活动、报名 / 候补</h2>
+          <p class="text-secondary small mb-3">
+            浏览、筛选、搜索活动。满员时可以加入候补队列，有名额空出会自动递补。
+          </p>
           <a class="btn btn-sm btn-primary" href="{{ url_for('activities.list_activities') }}">活动广场</a>
         </div>
       </div>
@@ -43,7 +46,8 @@
         <div class="card-body">
           <h2 class="h6 mb-2">我的报名</h2>
           <p class="text-secondary small mb-3">
-            查看签到状态与取消规则。共 {{ my_enrollments|length }} 条有效报名。
+            查看状态（待审核 / 正式 / 候补）、候补排位与取消规则。
+            共 {{ my_enrollments|length }} 条有效报名。
           </p>
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.my_enrollments') }}">查看</a>
         </div>
@@ -54,7 +58,7 @@
       <div class="col-12">
         <div class="card">
           <div class="card-body">
-            <h2 class="h6 mb-3">最近的报名</h2>
+            <h2 class="h6 mb-3">最近的有效报名</h2>
             <ul class="list-unstyled mb-0">
               {% for enrollment in my_enrollments %}
                 <li class="d-flex justify-content-between align-items-center border-bottom py-2">
@@ -62,8 +66,11 @@
                      href="{{ url_for('activities.activity_detail', activity_id=enrollment.activity.id) }}">
                     {{ enrollment.activity.title }}
                   </a>
-                  <span class="small text-secondary">
-                    {{ enrollment.activity.start_time|localtime('%Y-%m-%d %H:%M') }}
+                  <span class="d-flex align-items-center gap-2">
+                    {{ m.my_enroll_badge(enrollment, waitlist_positions.get(enrollment.id)) }}
+                    <span class="small text-secondary">
+                      {{ enrollment.activity.start_time|localtime('%Y-%m-%d %H:%M') }}
+                    </span>
                   </span>
                 </li>
               {% endfor %}
@@ -74,16 +81,16 @@
     {% endif %}
   </div>
 
-{% elif current_user.is_club %}
+{% elif current_user.is_teacher %}
   <div class="row g-3">
     <div class="col-md-6">
       <div class="card h-100">
         <div class="card-body">
-          <h2 class="h6 mb-2">社团工作台</h2>
+          <h2 class="h6 mb-2">我的活动</h2>
           <p class="text-secondary small mb-3">
-            查看你创建的全部活动、各状态数量和整体签到情况。
+            查看你负责的全部活动、正式 / 候补人数、待审核申请和整体签到情况。
           </p>
-          <a class="btn btn-sm btn-primary" href="{{ url_for('main.club_home') }}">进入</a>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('main.teacher_home') }}">进入</a>
         </div>
       </div>
     </div>
@@ -92,9 +99,38 @@
         <div class="card-body">
           <h2 class="h6 mb-2">发布活动</h2>
           <p class="text-secondary small mb-3">
-            社团创建的活动会进入<b>待审核</b>队列，管理员通过后才会出现在活动广场。
+            创建后直接发布，学生立刻可见。可设置人数上限与是否需要审核报名。
           </p>
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.new_activity') }}">新建</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">审核报名</h2>
+          <p class="text-secondary small mb-3">
+            {% if pending_total %}
+              有 {{ pending_total }} 条申请等着你处理。
+            {% else %}
+              当前没有待审核的申请。
+            {% endif %}
+            通过时还有余位才转「正式」，没有余位自动排进候补。
+          </p>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.teacher_enrollments') }}">去处理</a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="h6 mb-2">候补队列</h2>
+          <p class="text-secondary small mb-3">
+            当前共有 {{ waitlist_total }} 人在候补队列中等待。队列按进入候补的时间先到先得，
+            名额空出时自动递补，不需要人工操作。
+          </p>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.teacher_stats') }}">查看统计</a>
         </div>
       </div>
     </div>
@@ -105,13 +141,12 @@
     <div class="col-md-6">
       <div class="card h-100">
         <div class="card-body">
-          <h2 class="h6 mb-2">审核中心</h2>
+          <h2 class="h6 mb-2">活动监督</h2>
           <p class="text-secondary small mb-3">
-            待审核活动 {{ pending_count }} 场。管理员创建的活动跳过审核、直接发布。
+            查看平台全部活动；对违规活动做下线 / 恢复处理。
+            {% if offline_count %}当前有 {{ offline_count }} 场活动处于下线状态。{% endif %}
           </p>
-          <a class="btn btn-sm btn-primary" href="{{ url_for('admin.audit_center') }}">
-            进入处理{% if pending_count %} <span class="badge text-bg-light">{{ pending_count }}</span>{% endif %}
-          </a>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('admin.all_activities') }}">进入</a>
         </div>
       </div>
     </div>
@@ -119,11 +154,49 @@
       <div class="card h-100">
         <div class="card-body">
           <h2 class="h6 mb-2">管理后台</h2>
-          <p class="text-secondary small mb-3">全部活动、分类维护、用户与角色、密码找回。</p>
+          <p class="text-secondary small mb-3">
+            账号管理（停用 / 恢复）、分类维护、密码找回。共 {{ user_count }} 个账号。
+          </p>
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.home') }}">进入</a>
         </div>
       </div>
     </div>
   </div>
 {% endif %}
+
+{# ---- 角色职责说明（FR-9）：消除「这件事该找谁」的信息盲区 ---- #}
+<div class="card mt-4">
+  <div class="card-body">
+    <h2 class="h6 mb-3">角色职责说明</h2>
+    <div class="row g-3 small">
+      <div class="col-md-4">
+        <div class="fw-medium mb-1">学生</div>
+        <ul class="mb-0 ps-3 text-secondary">
+          <li>浏览活动、报名 / 加入候补</li>
+          <li>查看自己的报名状态与候补排位</li>
+          <li>取消 / 退出 / 撤销<b>本人的</b>报名</li>
+        </ul>
+      </div>
+      <div class="col-md-4">
+        <div class="fw-medium mb-1">活动组织教师</div>
+        <ul class="mb-0 ps-3 text-secondary">
+          <li>创建、发布、修改<b>本人负责</b>的活动</li>
+          <li>设置人数上限、参加资格、是否审核报名</li>
+          <li>审核报名申请、管理报名名单与签到</li>
+        </ul>
+      </div>
+      <div class="col-md-4">
+        <div class="fw-medium mb-1">系统管理员</div>
+        <ul class="mb-0 ps-3 text-secondary">
+          <li>维护账号：创建、停用 / 恢复、重置密码</li>
+          <li>监督活动：查看全部活动、下线 / 恢复违规活动</li>
+          <li>不介入具体报名，不代替教师编辑活动内容</li>
+        </ul>
+      </div>
+    </div>
+    <div class="small text-secondary mt-3">
+      跨职责事项：活动内容与报名问题找<b>组织教师</b>；账号无法登录、活动违规举报找<b>系统管理员</b>。
+    </div>
+  </div>
+</div>
 {% endblock %}

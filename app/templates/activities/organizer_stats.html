@@ -20,7 +20,19 @@
   <div class="col-6 col-md-3">
     <div class="card h-100"><div class="card-body text-center">
       <div class="h4 mb-0">{{ overview.enrolled }}</div>
-      <div class="small text-secondary">累计报名</div>
+      <div class="small text-secondary">累计正式报名</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ overview.waitlisted }}</div>
+      <div class="small text-secondary">候补中</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card h-100"><div class="card-body text-center">
+      <div class="h4 mb-0">{{ overview.pending }}</div>
+      <div class="small text-secondary">待审核申请</div>
     </div></div>
   </div>
   <div class="col-6 col-md-3">
@@ -54,10 +66,10 @@
             <tr>
               <th>活动</th>
               <th style="width:90px">状态</th>
-              <th style="width:110px" class="text-end">报名 / 上限</th>
+              <th style="width:120px" class="text-end">正式 / 上限</th>
+              <th style="width:80px" class="text-end">候补</th>
               <th style="width:90px" class="text-end">实到</th>
               <th style="width:90px" class="text-end">签到率</th>
-              <th style="width:90px" class="text-end">上座率</th>
               <th style="width:130px" class="text-end">操作</th>
             </tr>
           </thead>
@@ -74,9 +86,9 @@
               </td>
               <td>{{ m.status_badge(activity) }}</td>
               <td class="text-end">{{ s.enrolled }} / {{ s.capacity }}</td>
+              <td class="text-end">{{ s.waitlisted }}</td>
               <td class="text-end">{{ s.checked_in }}</td>
               <td class="text-end">{{ s.check_in_rate }}%</td>
-              <td class="text-end">{{ s.fill_rate }}%</td>
               <td class="text-end">
                 <a class="btn btn-sm btn-outline-secondary"
                    href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">详情</a>

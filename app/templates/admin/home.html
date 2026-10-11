@@ -6,19 +6,22 @@
 <h1 class="h4 mb-1">管理后台</h1>
 <p class="text-secondary small mb-4">
   你以 <strong>{{ current_user.name }}</strong>（{{ current_user.role_label }}）身份登录。
-  此页面只有校级管理员可以访问。
+  系统管理员的职责是<b>平台级的状态处理</b>：账号停用 / 恢复、违规活动下线 / 恢复。
+  不代替教师编辑活动内容，也不介入具体报名。
 </p>
 
 <div class="row g-3">
   <div class="col-md-6">
     <div class="card shadow-sm h-100">
       <div class="card-body">
-        <h2 class="h6 mb-2">审核中心</h2>
+        <h2 class="h6 mb-2">活动监督</h2>
         <p class="text-secondary small mb-3">
-          社团发布的活动必须经你审核通过，才会出现在活动广场。驳回必须填原因。
+          查看平台全部活动；对违规或明显错误的活动下线 / 恢复展示。
+          处理决定会作为「处理标记」展示给组织教师。
         </p>
-        <a class="btn btn-sm btn-primary" href="{{ url_for('admin.audit_center') }}">
-          进入处理{% if pending_activities %} <span class="badge text-bg-light">{{ pending_activities }}</span>{% endif %}
+        <a class="btn btn-sm btn-primary" href="{{ url_for('admin.all_activities') }}">
+          进入处理
+          {% if offline_activities %}<span class="badge text-bg-light">{{ offline_activities }} 场已下线</span>{% endif %}
         </a>
       </div>
     </div>
@@ -38,34 +41,25 @@
     </div>
   </div>
 
-  <div class="col-md-4">
+  <div class="col-md-6">
     <div class="card shadow-sm h-100">
       <div class="card-body">
-        <h2 class="h6 mb-2">全部活动</h2>
-        <p class="text-secondary small mb-3">按状态筛选，必要时强制取消。</p>
-        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.all_activities') }}">查看</a>
+        <h2 class="h6 mb-2">账号管理</h2>
+        <p class="text-secondary small mb-3">
+          系统不开放自助注册，账号一律由管理员创建。可停用 / 恢复账号、调整角色。
+          共 {{ user_count }} 个账号。
+        </p>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.users') }}">管理</a>
       </div>
     </div>
   </div>
 
-  <div class="col-md-4">
+  <div class="col-md-6">
     <div class="card shadow-sm h-100">
       <div class="card-body">
         <h2 class="h6 mb-2">分类管理</h2>
         <p class="text-secondary small mb-3">维护活动分类。删除前会校验是否仍被活动引用。</p>
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.categories') }}">维护</a>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-md-4">
-    <div class="card shadow-sm h-100">
-      <div class="card-body">
-        <h2 class="h6 mb-2">用户管理</h2>
-        <p class="text-secondary small mb-3">
-          系统不开放自助注册，账号一律由管理员创建。共 {{ user_count }} 个账号。
-        </p>
-        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.users') }}">管理</a>
       </div>
     </div>
   </div>

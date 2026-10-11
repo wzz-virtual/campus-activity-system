@@ -32,7 +32,7 @@
           <th style="width:130px">学号 / 工号</th>
           <th style="width:150px">姓名</th>
           <th style="width:140px">角色</th>
-          <th style="width:150px">所属社团</th>
+          <th style="width:150px">所属组织</th>
           <th style="width:90px">状态</th>
           <th style="width:230px" class="text-end">操作</th>
         </tr>
@@ -54,7 +54,7 @@
           </td>
           <td>
             <input class="form-control form-control-sm" form="user-{{ user.id }}"
-                   name="club_name" value="{{ user.club_name or '' }}" placeholder="仅社团角色">
+                   name="club_name" value="{{ user.club_name or '' }}" placeholder="教师所属组织/部门">
           </td>
           <td>
             <select class="form-select form-select-sm" form="user-{{ user.id }}" name="status">
@@ -89,8 +89,8 @@
   <div class="card-body">
     <h2 class="h6 mb-3">新建账号</h2>
     <p class="text-secondary small">
-      停用账号后该用户无法登录，但历史报名与签到记录会保留——统计口径不会因为
-      有人离校就变样。
+      停用账号后该用户<b>无法登录</b>，但已有的报名记录不受影响（DEC-6）；
+      问题处理完把状态改回「正常」即可恢复使用。统计口径也不会因为有人离校就变样。
     </p>
     <form method="post" action="{{ url_for('admin.create_user') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -112,7 +112,7 @@
           </select>
         </div>
         <div class="col-md-2">
-          <label class="form-label small" for="f-club">所属社团</label>
+          <label class="form-label small" for="f-club">所属组织</label>
           <input class="form-control form-control-sm" id="f-club" name="club_name" maxlength="100">
         </div>
         <div class="col-md-2">

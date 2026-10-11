@@ -1,16 +1,24 @@
 {% extends "base.html" %}
 {% import "activities/_macros.html" as m %}
 
-{% block title %}社团工作台 · 校园活动管理系统{% endblock %}
+{% block title %}教师工作台 · 校园活动管理系统{% endblock %}
 
 {% block content %}
-<h1 class="h4 mb-1">社团工作台</h1>
+<h1 class="h4 mb-1">教师工作台</h1>
 <p class="text-secondary small mb-4">
   {{ current_user.club_name or current_user.name }} · 共 {{ overview.activity_count }} 场活动
-  　·　累计报名 <strong>{{ overview.enrolled }}</strong> 人
-  　·　累计到场 <strong>{{ overview.checked_in }}</strong> 人
+  　·　累计正式报名 <strong>{{ overview.enrolled }}</strong> 人
+  　·　候补 <strong>{{ overview.waitlisted }}</strong> 人
+  　·　待审核申请 <strong>{{ overview.pending }}</strong> 条
   　·　整体签到率 <strong>{{ overview.check_in_rate }}%</strong>
 </p>
+
+{% if overview.pending %}
+  <div class="alert alert-info small">
+    有 <strong>{{ overview.pending }}</strong> 条报名申请等着你审核。
+    到相应活动的「名单与签到」页逐条处理——通过时还有余位才转「正式」，没有余位自动排进候补。
+  </div>
+{% endif %}
 
 <div class="card mb-3">
   <div class="card-body">
@@ -31,7 +39,7 @@
       <h2 class="h6 mb-0">我的活动</h2>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-primary" href="{{ url_for('activities.new_activity') }}">发布活动</a>
-        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.club_stats') }}">数据统计</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.teacher_stats') }}">数据统计</a>
       </div>
     </div>
 
@@ -47,28 +55,36 @@
               <th>活动</th>
               <th style="width:110px">状态</th>
               <th style="width:150px">时间</th>
-              <th style="width:100px" class="text-end">报名</th>
-              <th style="width:140px" class="text-end">操作</th>
+              <th style="width:130px" class="text-end">正式 / 候补</th>
+              <th style="width:170px" class="text-end">操作</th>
             </tr>
           </thead>
           <tbody>
           {% for activity in activities %}
+            {% set pending_n = pending_counts.get(activity.id, 0) %}
+            {% set waitlist_n = waitlist_counts.get(activity.id, 0) %}
             <tr>
               <td>
                 <a class="link-dark text-decoration-none"
                    href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">
                   {{ activity.title }}
                 </a>
-                {% if activity.status == 'REJECTED' and activity.reject_reason %}
-                  <div class="small text-danger">驳回原因：{{ activity.reject_reason }}</div>
+                {% if activity.requires_review %}<span class="badge text-bg-info">需审核</span>{% endif %}
+                {% if pending_n %}
+                  <div class="small text-info">待审核 {{ pending_n }} 条</div>
                 {% endif %}
               </td>
               <td>{{ m.status_badge(activity) }}</td>
               <td class="small">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</td>
-              <td class="text-end small">{{ activity.enrolled_count }} / {{ activity.capacity }}</td>
+              <td class="text-end small">
+                {{ activity.enrolled_count }} / {{ activity.capacity }}
+                {% if waitlist_n %}<div class="text-warning-emphasis">候补 {{ waitlist_n }}</div>{% endif %}
+              </td>
               <td class="text-end">
                 <a class="btn btn-sm btn-outline-secondary"
-                   href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单</a>
+                   href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">
+                  名单与签到{% if pending_n %} <span class="badge text-bg-info">{{ pending_n }}</span>{% endif %}
+                </a>
               </td>
             </tr>
           {% endfor %}

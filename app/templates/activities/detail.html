@@ -6,7 +6,6 @@
 {% block content %}
 {% set is_owner = current_user.is_authenticated and activity.organizer_id == current_user.id %}
 {% set is_admin = current_user.is_authenticated and current_user.is_admin %}
-{% set can_manage = is_owner or is_admin %}
 
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb small">
@@ -21,8 +20,8 @@
       <h1 class="h4 mb-0">{{ activity.title }}</h1>
       <div class="d-flex align-items-center gap-2">
         {{ m.status_badge(activity) }}
-        {% if activity.status == 'PUBLISHED' %}
-          <span class="badge text-bg-light border">报名中</span>
+        {% if activity.requires_review %}
+          <span class="badge text-bg-info">需审核</span>
         {% endif %}
       </div>
     </div>
@@ -46,10 +45,28 @@
       <dt class="col-sm-2 text-secondary">名额</dt>
       <dd class="col-sm-10">
         {{ activity.enrolled_count }} / {{ activity.capacity }} 人
-        （剩余 <strong>{{ activity.remaining }}</strong>）
+        {% if activity.is_full %}
+          <span class="text-danger">（已满员）</span>
+        {% else %}
+          （剩余 <strong>{{ activity.remaining }}</strong>）
+        {% endif %}
       </dd>
 
-      <dt class="col-sm-2 text-secondary">组织者</dt>
+      <dt class="col-sm-2 text-secondary">报名方式</dt>
+      <dd class="col-sm-10">
+        {% if activity.requires_review %}
+          需组织教师审核，通过后按当时余位确定「正式」或「候补」
+        {% else %}
+          无需审核：有余位直接「正式」，满员自动进入「候补」
+        {% endif %}
+      </dd>
+
+      {% if activity.qualification %}
+        <dt class="col-sm-2 text-secondary">参加资格</dt>
+        <dd class="col-sm-10">{{ activity.qualification }}</dd>
+      {% endif %}
+
+      <dt class="col-sm-2 text-secondary">组织教师</dt>
       <dd class="col-sm-10">
         {{ activity.organizer.name }}
         {% if activity.organizer.club_name %}（{{ activity.organizer.club_name }}）{% endif %}
@@ -67,35 +84,69 @@
   </div>
 </div>
 
-{# ---- 驳回原因：必须让创建者看得到，否则他不知道要改什么 ---- #}
-{% if activity.status == 'REJECTED' and activity.reject_reason %}
+{# ---- 管理员的下线处理标记：教师与管理员都看得到（TC-14） ---- #}
+{% if activity.status == 'OFFLINE' %}
   <div class="alert alert-danger">
-    <strong>活动被驳回。</strong>原因：{{ activity.reject_reason }}
-    {% if is_owner %}
-      <div class="small mt-1">修改后可以重新提交审核。</div>
+    <strong>该活动已被管理员下线</strong>，学生端不再展示、不能报名。
+    {% if offline_record %}
+      原因：{{ offline_record.reason or '（未填写）' }}
+      <div class="small mt-1">
+        处理人：{{ offline_record.operator.name }} ·
+        {{ offline_record.created_at|localtime('%Y-%m-%d %H:%M') }}
+      </div>
+    {% endif %}
+    {% if is_admin %}
+      <div class="small mt-1">核实处理后，可在下方「管理员操作」里恢复展示。</div>
     {% endif %}
   </div>
 {% endif %}
 
-{# ---- 报名 / 取消报名 ---- #}
+{# ---- 报名 / 我的报名状态 ---- #}
 {% if current_user.is_authenticated %}
   <div class="card mb-3">
     <div class="card-body">
       <h2 class="h6 mb-3">我的报名</h2>
 
-      {% if enrollment and enrollment.status == 'ENROLLED' %}
+      {% if enrollment_active %}
+        {# —— 已报名：按三种状态分别展示，并把「能做什么」写清楚 —— #}
         <p class="mb-2">
-          报名状态：
-          <span class="badge {{ check_in_state_styles.get(check_in_state, 'text-bg-secondary') }}">
-            {{ check_in_state_labels.get(check_in_state, check_in_state) }}
+          当前状态：
+          <span class="badge {{ enroll_status_styles.get(enrollment.status, 'text-bg-secondary') }}">
+            {%- if enrollment.status == 'CONFIRMED' %}正式参加
+            {%- elif enrollment.status == 'WAITLISTED' %}候补中{% if waitlist_position %} · 第 {{ waitlist_position }} 位{% endif %}
+            {%- else %}待审核{% endif %}
           </span>
+          {% if enrollment.status == 'CONFIRMED' and check_in_state %}
+            <span class="badge {{ check_in_state_styles.get(check_in_state, 'text-bg-secondary') }}">
+              {{ check_in_state_labels.get(check_in_state, check_in_state) }}
+            </span>
+          {% endif %}
           <span class="small text-secondary ms-2">
             报名于 {{ enrollment.enrolled_at|localtime('%Y-%m-%d %H:%M') }}
+            {% if enrollment.status == 'WAITLISTED' and enrollment.waitlisted_at %}
+              · 进入候补 {{ enrollment.waitlisted_at|localtime('%Y-%m-%d %H:%M') }}
+            {% endif %}
+            {% if enrollment.reviewed_at %}
+              · 审核于 {{ enrollment.reviewed_at|localtime('%Y-%m-%d %H:%M') }}
+            {% endif %}
             {% if enrollment.check_in_at %}
               · 签到于 {{ enrollment.check_in_at|localtime('%Y-%m-%d %H:%M') }}
             {% endif %}
           </span>
         </p>
+
+        {% if enrollment.status == 'WAITLISTED' %}
+          <div class="alert alert-warning small mb-2 py-2">
+            你在候补队列的<strong>第 {{ waitlist_position }} 位</strong>。
+            名额空出时按队列顺序<strong>自动递补</strong>，无需任何操作；
+            也可以随时退出候补。队列顺序按进入候补的时间先到先得，任何角色都不能调整。
+          </div>
+        {% elif enrollment.status == 'PENDING' %}
+          <div class="alert alert-info small mb-2 py-2">
+            申请已提交，等待组织教师逐人确认。
+            <strong>通过不等于一定参加</strong>：教师通过时还有余位才转「正式」，否则排入候补队列。
+          </div>
+        {% endif %}
 
         {% if cancel_reason %}
           <div class="alert alert-secondary small mb-2 py-2">{{ cancel_reason }}</div>
@@ -109,33 +160,69 @@
         {% endif %}
 
         <div class="d-flex flex-wrap gap-2">
-          {% if activity.status == 'ONGOING' and check_in_state != 'checked_in' %}
+          {% if activity.status == 'ONGOING' and enrollment.status == 'CONFIRMED' and check_in_state != 'checked_in' %}
             <a class="btn btn-sm btn-primary"
                href="{{ url_for('activities.check_in', activity_id=activity.id) }}">去签到</a>
           {% endif %}
 
           {% if not cancel_reason %}
             <form method="post" action="{{ url_for('activities.unenroll_activity', activity_id=activity.id) }}"
-                  onsubmit="return confirm('确定要取消报名吗？名额会立即释放给其他人。');">
+                  onsubmit="return confirm('{% if enrollment.status == 'CONFIRMED' %}确定要取消报名吗？名额会立即释放给候补队列。{% elif enrollment.status == 'WAITLISTED' %}确定要退出候补吗？{% else %}确定要撤销申请吗？{% endif %}');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               {# 破坏性操作用红色，与主操作在视觉上分开 #}
-              <button class="btn btn-sm btn-outline-danger" type="submit">取消报名</button>
+              <button class="btn btn-sm btn-outline-danger" type="submit">
+                {%- if enrollment.status == 'CONFIRMED' %}取消报名
+                {%- elif enrollment.status == 'WAITLISTED' %}退出候补
+                {%- else %}撤销申请{% endif %}
+              </button>
             </form>
           {% else %}
             {# 按钮不可用时必须说明原因，不能只置灰 #}
-            <button class="btn btn-sm btn-outline-danger" type="button" disabled>取消报名</button>
+            <button class="btn btn-sm btn-outline-danger" type="button" disabled>
+              {%- if enrollment.status == 'CONFIRMED' %}取消报名
+              {%- elif enrollment.status == 'WAITLISTED' %}退出候补
+              {%- else %}撤销申请{% endif %}
+            </button>
           {% endif %}
         </div>
 
       {% else %}
+        {# —— 没在有效报名里：可能从没报过，也可能被拒 / 已取消 —— #}
+        {% if enrollment and enrollment.status == 'REJECTED' %}
+          <div class="alert alert-danger small mb-2 py-2">
+            你的报名申请未通过{% if enrollment.reviewed_at %}（{{ enrollment.reviewed_at|localtime('%Y-%m-%d %H:%M') }}）{% endif %}。
+            {% if can_enroll %}如仍符合参加条件，可以重新报名。{% endif %}
+          </div>
+        {% elif enrollment and enrollment.status == 'CANCELED' %}
+          <div class="alert alert-secondary small mb-2 py-2">
+            你已取消这次报名。重新报名会按<strong>新的</strong>时间重新排队，不保留原来的位置。
+          </div>
+        {% endif %}
+
         {% if can_enroll %}
           <form method="post" action="{{ url_for('activities.enroll_activity', activity_id=activity.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-primary" type="submit">立即报名</button>
-            <span class="small text-secondary ms-2">当前剩余 {{ activity.remaining }} 个名额</span>
+            {% if enroll_action == 'apply' %}
+              <button class="btn btn-primary" type="submit">提交报名申请</button>
+              <span class="small text-secondary ms-2">
+                该活动需组织教师审核；通过后按当时余位确定为「正式」或「候补」。
+              </span>
+            {% elif enroll_action == 'waitlist' %}
+              <button class="btn btn-warning" type="submit">加入候补队列</button>
+              <span class="small text-secondary ms-2">
+                活动已满员，现在报名会进入候补队列，有名额空出时<strong>自动递补</strong>。
+              </span>
+            {% else %}
+              <button class="btn btn-primary" type="submit">立即报名</button>
+              <span class="small text-secondary ms-2">当前剩余 {{ activity.remaining }} 个名额</span>
+            {% endif %}
           </form>
         {% else %}
-          <button class="btn btn-primary" type="button" disabled>立即报名</button>
+          <button class="btn btn-primary" type="button" disabled>
+            {%- if enroll_action == 'apply' %}提交报名申请
+            {%- elif enroll_action == 'waitlist' %}加入候补队列
+            {%- else %}立即报名{% endif %}
+          </button>
           <div class="small text-secondary mt-2">
             {{ blocked_reason }}
           </div>
@@ -149,8 +236,8 @@
   </div>
 {% endif %}
 
-{# ---- 组织者与管理员的操作区 ---- #}
-{% if can_manage %}
+{# ---- 组织教师的管理区 ---- #}
+{% if is_owner %}
   <div class="card mb-3">
     <div class="card-body">
       <h2 class="h6 mb-3">管理</h2>
@@ -167,32 +254,15 @@
       </div>
 
       <div class="d-flex flex-wrap gap-2">
-        {% if activity.status in ['DRAFT', 'REJECTED'] and activity.organizer_id == current_user.id %}
-          <form method="post" action="{{ url_for('activities.submit_activity', activity_id=activity.id) }}">
+        {% if activity.status == 'DRAFT' %}
+          <form method="post" action="{{ url_for('activities.publish', activity_id=activity.id) }}"
+                onsubmit="return confirm('发布后学生立刻可以看到并报名，确定吗？');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-primary" type="submit">
-              {{ '重新提交审核' if activity.status == 'REJECTED' else '提交审核' }}
-            </button>
+            <button class="btn btn-sm btn-primary" type="submit">发布活动</button>
           </form>
         {% endif %}
 
-        {% if activity.status == 'PENDING' %}
-          {% if activity.organizer_id == current_user.id %}
-            <form method="post" action="{{ url_for('activities.withdraw_activity', activity_id=activity.id) }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-sm btn-outline-secondary" type="submit">撤回为草稿</button>
-            </form>
-          {% endif %}
-          {% if is_admin %}
-            <form method="post" action="{{ url_for('activities.approve_activity', activity_id=activity.id) }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="next" value="{{ request.path }}">
-              <button class="btn btn-sm btn-success" type="submit">审核通过</button>
-            </form>
-          {% endif %}
-        {% endif %}
-
-        {% if activity.status in ['PUBLISHED', 'ONGOING'] and can_manage %}
+        {% if activity.status in ['PUBLISHED', 'ONGOING'] %}
           <form method="post" action="{{ url_for('activities.open_check_in', activity_id=activity.id) }}"
                 onsubmit="return confirm('开启签到后活动会进入「进行中」，报名与取消报名通道同时关闭。确定继续吗？');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -208,7 +278,7 @@
           </form>
         {% endif %}
 
-        {% if activity.status in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING'] %}
+        {% if activity.status in ['DRAFT', 'PUBLISHED', 'ONGOING'] %}
           <form method="post" action="{{ url_for('activities.cancel_activity', activity_id=activity.id) }}"
                 onsubmit="return confirm('取消活动后学生将无法报名，已报名的记录会保留。确定吗？');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -220,29 +290,51 @@
   </div>
 {% endif %}
 
-{# ---- 管理员的驳回入口：单独放，因为要填原因 ---- #}
-{% if is_admin and activity.status == 'PENDING' %}
-  <div class="card mb-3 border-danger">
+{# ---- 管理员的活动监督区：只做状态处理，不代教师改内容、不动报名 ---- #}
+{% if is_admin %}
+  <div class="card mb-3">
     <div class="card-body">
-      <h2 class="h6 mb-2">驳回这个活动</h2>
-      <p class="small text-secondary">
-        驳回必须填写原因，原因会展示给创建者。不填原因的驳回等于让组织者猜，
-        猜不出来就会来问你，沟通成本反而更高。
-      </p>
-      <form method="post" action="{{ url_for('activities.reject_activity', activity_id=activity.id) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="next" value="{{ request.path }}">
-        <div class="mb-2">
-          <textarea class="form-control form-control-sm" name="reason" rows="2" maxlength="255"
-                    placeholder="例如：活动时间与校运会冲突，请调整后重新提交"></textarea>
-        </div>
-        <button class="btn btn-sm btn-outline-danger" type="submit">确认驳回</button>
-      </form>
+      <h2 class="h6 mb-3">管理员操作</h2>
+      {% if activity.status in offinable_statuses %}
+        <form class="row g-2 align-items-end"
+              method="post" action="{{ url_for('admin.offline_activity', activity_id=activity.id) }}"
+              onsubmit="return confirm('下线后学生端不再展示该活动，确定吗？');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <div class="col-sm-6">
+            <label class="form-label small mb-1" for="offline-reason">下线原因（会展示给组织教师）</label>
+            <input class="form-control form-control-sm" id="offline-reason" name="reason"
+                   maxlength="255" placeholder="例如：活动信息与实际不符，待核实">
+          </div>
+          <div class="col-sm-3">
+            <button class="btn btn-sm btn-outline-danger" type="submit">下线活动</button>
+          </div>
+        </form>
+      {% elif activity.status == 'OFFLINE' %}
+        <form class="row g-2 align-items-end"
+              method="post" action="{{ url_for('admin.restore_activity', activity_id=activity.id) }}"
+              onsubmit="return confirm('恢复后活动会按时间重新展示，确定吗？');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <div class="col-sm-6">
+            <label class="form-label small mb-1" for="restore-reason">恢复说明（可选）</label>
+            <input class="form-control form-control-sm" id="restore-reason" name="reason" maxlength="255">
+          </div>
+          <div class="col-sm-3">
+            <button class="btn btn-sm btn-success" type="submit">恢复展示</button>
+          </div>
+        </form>
+      {% else %}
+        <p class="small text-secondary mb-0">
+          当前状态（{{ activity.status_label }}）不需要处理。管理员对活动的工具只有
+          「下线 / 恢复」——不代替教师编辑内容，也不处理具体报名。
+        </p>
+      {% endif %}
     </div>
   </div>
 {% endif %}
 
-{# ---- 统计概览（仅创建者与管理员） ---- #}
+{# ---- 数据概览（仅组织教师本人：管理员不介入具体报名） ---- #}
 {% if stats %}
   <div class="card mb-3">
     <div class="card-body">
@@ -250,26 +342,26 @@
       <div class="row g-3 text-center">
         <div class="col-6 col-md-3">
           <div class="border rounded p-2">
-            <div class="h5 mb-0">{{ stats.enrolled }}</div>
-            <div class="small text-secondary">报名人数</div>
+            <div class="h5 mb-0">{{ stats.enrolled }} <span class="fs-6 text-secondary">/ {{ stats.capacity }}</span></div>
+            <div class="small text-secondary">正式人数 / 上限</div>
           </div>
         </div>
         <div class="col-6 col-md-3">
           <div class="border rounded p-2">
-            <div class="h5 mb-0">{{ stats.checked_in }}</div>
-            <div class="small text-secondary">实到人数</div>
+            <div class="h5 mb-0">{{ stats.waitlisted }}</div>
+            <div class="small text-secondary">候补人数</div>
           </div>
         </div>
         <div class="col-6 col-md-3">
           <div class="border rounded p-2">
-            <div class="h5 mb-0">{{ stats.check_in_rate }}%</div>
-            <div class="small text-secondary">签到率</div>
+            <div class="h5 mb-0">{{ stats.remaining }}</div>
+            <div class="small text-secondary">剩余名额</div>
           </div>
         </div>
         <div class="col-6 col-md-3">
           <div class="border rounded p-2">
-            <div class="h5 mb-0">{{ stats.fill_rate }}%</div>
-            <div class="small text-secondary">上座率</div>
+            <div class="h5 mb-0">{{ stats.pending }}</div>
+            <div class="small text-secondary">待审核申请</div>
           </div>
         </div>
       </div>

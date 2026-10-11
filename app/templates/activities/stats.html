@@ -24,20 +24,20 @@
   <div class="card-body">
     <div class="row g-3 text-center">
       <div class="col-6 col-md-3">
-        <div class="h3 mb-0">{{ stats.enrolled }}</div>
-        <div class="small text-secondary">报名人数</div>
+        <div class="h3 mb-0">{{ stats.enrolled }}<span class="fs-6 text-secondary"> / {{ stats.capacity }}</span></div>
+        <div class="small text-secondary">正式人数 / 上限</div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="h3 mb-0">{{ stats.waitlisted }}</div>
+        <div class="small text-secondary">候补人数</div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="h3 mb-0">{{ stats.pending }}</div>
+        <div class="small text-secondary">待审核申请</div>
       </div>
       <div class="col-6 col-md-3">
         <div class="h3 mb-0">{{ stats.checked_in }}</div>
         <div class="small text-secondary">实到人数</div>
-      </div>
-      <div class="col-6 col-md-3">
-        <div class="h3 mb-0">{{ stats.absent }}</div>
-        <div class="small text-secondary">缺席人数</div>
-      </div>
-      <div class="col-6 col-md-3">
-        <div class="h3 mb-0">{{ stats.remaining }}</div>
-        <div class="small text-secondary">剩余名额</div>
       </div>
     </div>
   </div>
@@ -50,7 +50,7 @@
         <h2 class="h6 mb-1">签到率</h2>
         <p class="display-6 mb-1">{{ stats.check_in_rate }}%</p>
         <p class="small text-secondary mb-3">
-          {{ stats.checked_in }} 实到 ÷ {{ stats.enrolled }} 报名
+          {{ stats.checked_in }} 实到 ÷ {{ stats.enrolled }} 正式
         </p>
         <p class="small text-secondary mb-0">
           反映「报名的人来了多少」：活动的实际吸引力、提醒是否到位。
@@ -64,7 +64,7 @@
         <h2 class="h6 mb-1">上座率</h2>
         <p class="display-6 mb-1">{{ stats.fill_rate }}%</p>
         <p class="small text-secondary mb-3">
-          {{ stats.enrolled }} 报名 ÷ {{ stats.capacity }} 人数上限
+          {{ stats.enrolled }} 正式 ÷ {{ stats.capacity }} 人数上限
         </p>
         <p class="small text-secondary mb-0">
           反映「名额用掉了多少」：宣传是否触达了足够的人。
@@ -76,16 +76,13 @@
 
 <div class="card mt-3">
   <div class="card-body">
-    <h2 class="h6 mb-2">两个指标要一起看</h2>
+    <h2 class="h6 mb-2">几个口径说明</h2>
     <ul class="small text-secondary mb-0">
-      <li>签到率低、上座率高 → 宣传到位了，但内容不太吸引人；</li>
-      <li>两个都低 → 问题出在宣传本身，报名的基数就不够。</li>
+      <li>签到率低、上座率高 → 宣传到位了，但内容不太吸引人；两个都低 → 问题出在宣传本身。</li>
+      <li><b>正式人数</b>占用名额，永不超上限；<b>候补</b>不占名额，按进入候补的时间排队，
+        名额空出时自动递补。</li>
+      <li><b>缺席</b>（正式但没签到）计入正式人数，但不计入实到人数。</li>
     </ul>
-    <hr>
-    <p class="small text-secondary mb-0">
-      统计口径：报名总数包含「已取消」以外的所有报名记录；「缺席」计入报名总数，
-      但不计入实到人数。
-    </p>
   </div>
 </div>
 {% endblock %}

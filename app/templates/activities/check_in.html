@@ -44,12 +44,25 @@
           活动已结束，签到通道已关闭。
         {% elif activity.status == 'CANCELED' %}
           活动已取消。
+        {% elif activity.status == 'OFFLINE' %}
+          活动已被管理员下线。
         {% else %}
           活动尚未发布。
         {% endif %}
       </div>
 
-    {% elif not enrollment or enrollment.status != 'ENROLLED' %}
+    {% elif enrollment and enrollment.status == 'WAITLISTED' %}
+      <div class="alert alert-warning mb-0">
+        你还在<b>候补队列</b>中：候补不占名额，等有空位自动转为「正式」后才能签到。
+        可以在活动详情页查看你的排位。
+      </div>
+
+    {% elif enrollment and enrollment.status == 'PENDING' %}
+      <div class="alert alert-info mb-0">
+        你的报名申请还在<b>等待组织教师审核</b>，通过并转为「正式」后才能签到。
+      </div>
+
+    {% elif not enrollment or enrollment.status != 'CONFIRMED' %}
       <div class="alert alert-warning mb-0">
         你没有报名这个活动，无法签到。签到信息挂在报名记录上，只有报名的人能签到。
       </div>

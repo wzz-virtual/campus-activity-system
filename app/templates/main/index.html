@@ -3,22 +3,24 @@
 
 {% block content %}
 <div class="p-4 mb-4 bg-white rounded-3 border">
-  <h1 class="h4 mb-2">校园活动管理系统</h1>
+  <h1 class="h4 mb-2">校园活动管理系统 <span class="fs-6 text-secondary align-middle">V2.0</span></h1>
   <p class="text-secondary mb-3">
     把校园活动从「群通知 + 在线表格」搬到线上，跑通一条可追溯的闭环：
   </p>
   <p class="mb-0">
-    <span class="badge text-bg-light border">组织者发布</span>
+    <span class="badge text-bg-light border">组织教师发布</span>
     <span class="text-secondary">→</span>
-    <span class="badge text-bg-light border">学生浏览报名</span>
+    <span class="badge text-bg-light border">学生报名 / 候补</span>
+    <span class="text-secondary">→</span>
+    <span class="badge text-bg-light border">教师审核</span>
     <span class="text-secondary">→</span>
     <span class="badge text-bg-light border">现场签到</span>
     <span class="text-secondary">→</span>
     <span class="badge text-bg-light border">统计复盘</span>
   </p>
   <p class="text-secondary small mt-3 mb-0">
-    任何一个环节断了（比如报了名却不知道有没有报上、到了现场签不了到），
-    用户就会退回群里用表格。
+    V2.0 新增：满员不再"没下文"——报名自动进入<b>候补队列</b>，名额空出时按先来后到自动递补；
+    需要审核的活动由组织教师逐人确认，<b>通过不等于一定参加</b>，还要看当时有没有位置。
   </p>
   <div class="d-flex flex-wrap gap-2 mt-3">
     <a class="btn btn-sm btn-primary" href="{{ url_for('activities.list_activities') }}">进入活动广场</a>
@@ -54,7 +56,7 @@
             <div class="small text-secondary mb-2">
               🕒 {{ activity.start_time|localtime }}　📍 {{ activity.location }}
             </div>
-            <div class="small mb-3">{{ m.quota_text(activity) }}</div>
+            <div class="small mb-3">{{ m.enroll_line(activity, now) }}</div>
             <div class="mt-auto">
               <a class="btn btn-sm btn-outline-primary"
                  href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看详情</a>

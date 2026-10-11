@@ -36,12 +36,14 @@
             <tr>
               <th>活动</th>
               <th style="width:180px">时间</th>
-              <th style="width:120px">报名</th>
-              <th style="width:280px" class="text-end">操作</th>
+              <th style="width:150px">报名 / 候补</th>
+              <th style="width:320px" class="text-end">操作</th>
             </tr>
           </thead>
           <tbody>
           {% for activity in items %}
+            {% set pending_n = pending_counts.get(activity.id, 0) %}
+            {% set waitlist_n = waitlist_counts.get(activity.id, 0) %}
             <tr>
               <td>
                 <a class="link-dark text-decoration-none"
@@ -49,14 +51,28 @@
                   {{ activity.title }}
                 </a>
                 <div class="small text-secondary">{{ activity.location }}</div>
-                {% if status == 'REJECTED' and activity.reject_reason %}
-                  <div class="small text-danger">驳回原因：{{ activity.reject_reason }}</div>
+                {% if status == 'OFFLINE' %}
+                  {% set record = offline_records.get(activity.id) %}
+                  <div class="small text-danger">
+                    已被管理员下线{% if record %}：{{ record.reason or '（未填写原因）' }}
+                      <span class="text-secondary">（{{ record.operator.name }} ·
+                        {{ record.created_at|localtime('%Y-%m-%d %H:%M') }}）</span>
+                    {% endif %}
+                  </div>
+                {% endif %}
+                {% if activity.requires_review %}
+                  <span class="badge text-bg-info">需审核</span>
                 {% endif %}
               </td>
               <td class="small">{{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}</td>
               <td class="small">
-                {{ activity.enrolled_count }} / {{ activity.capacity }}
-                {% if activity.is_full %}<div class="text-danger small">已满</div>{% endif %}
+                正式 {{ activity.enrolled_count }} / {{ activity.capacity }}
+                {% if waitlist_n %}
+                  <div class="text-warning-emphasis small">候补 {{ waitlist_n }} 人</div>
+                {% endif %}
+                {% if pending_n %}
+                  <div class="text-info small">待审核 {{ pending_n }} 条</div>
+                {% endif %}
               </td>
               {#
                 按状态给出这一状态下真正能做的操作。不渲染做不了的按钮，
@@ -64,23 +80,34 @@
               #}
               <td class="text-end">
                 <div class="d-inline-flex flex-wrap gap-1 justify-content-end">
-                  {% if status in ['DRAFT', 'REJECTED'] %}
+                  {% if status == 'DRAFT' %}
                     <a class="btn btn-sm btn-outline-secondary"
                        href="{{ url_for('activities.edit_activity', activity_id=activity.id) }}">编辑</a>
-                    <form method="post" action="{{ url_for('activities.submit_activity', activity_id=activity.id) }}">
+                    <form method="post" action="{{ url_for('activities.publish', activity_id=activity.id) }}"
+                          onsubmit="return confirm('发布后学生立刻可以看到并报名，确定吗？');">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <button class="btn btn-sm btn-primary" type="submit">
-                        {{ '重新提交' if status == 'REJECTED' else '提交审核' }}
-                      </button>
+                      <button class="btn btn-sm btn-primary" type="submit">发布</button>
                     </form>
-                  {% elif status == 'PENDING' %}
+                    <form method="post" action="{{ url_for('activities.delete_activity', activity_id=activity.id) }}"
+                          onsubmit="return confirm('删除草稿后无法恢复，确定吗？');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
+                    </form>
+                  {% elif status == 'PUBLISHED' %}
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">
+                      名单与签到{% if pending_n %} <span class="badge text-bg-info">{{ pending_n }}</span>{% endif %}
+                    </a>
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">统计</a>
                     <a class="btn btn-sm btn-outline-secondary"
                        href="{{ url_for('activities.edit_activity', activity_id=activity.id) }}">编辑</a>
-                    <form method="post" action="{{ url_for('activities.withdraw_activity', activity_id=activity.id) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <button class="btn btn-sm btn-outline-secondary" type="submit">撤回</button>
-                    </form>
-                  {% elif status in ['PUBLISHED', 'ONGOING', 'FINISHED'] %}
+                  {% elif status == 'ONGOING' %}
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单与签到</a>
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('activities.activity_stats_page', activity_id=activity.id) }}">统计</a>
+                  {% elif status == 'FINISHED' %}
                     <a class="btn btn-sm btn-outline-secondary"
                        href="{{ url_for('activities.activity_roster', activity_id=activity.id) }}">名单与签到</a>
                     <a class="btn btn-sm btn-outline-secondary"
@@ -90,7 +117,7 @@
                        href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">查看</a>
                   {% endif %}
 
-                  {% if status in ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING'] %}
+                  {% if status in ['DRAFT', 'PUBLISHED', 'ONGOING'] %}
                     <form method="post" action="{{ url_for('activities.cancel_activity', activity_id=activity.id) }}"
                           onsubmit="return confirm('确定取消「{{ activity.title }}」吗？');">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
