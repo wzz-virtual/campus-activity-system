@@ -5,8 +5,8 @@
 
 这里提供两层：
 
-* ``role_required``  —— 校验角色（学生 / 社团 / 管理员）
-* ``owner_required`` —— 在角色之上再校验资源归属（只能动自己创建的）
+* ``role_required``  —— 校验角色（学生 / 活动组织教师 / 系统管理员）
+* ``owner_required`` —— 在角色之上再校验资源归属（只能动自己负责的）
 
 约定：**不要把 ``current_user.role == ...`` 散写在各处视图里**。权限判断一旦
 分散，迟早会漏掉一个接口。统一走装饰器之后，「没加装饰器的写接口」就等价于
@@ -64,7 +64,11 @@ def role_required(*roles):
 
 
 def owner_required(get_owner_id):
-    """校验「只有资源的所有者或管理员能操作」。
+    """校验「只有资源的所有者本人能操作」。
+
+    ⚠️ V2.0 收紧了这里：**管理员不再默认放行**。需求分析的权限矩阵写得很直白
+    ——「管理员不代替教师编辑活动内容、不处理具体报名」（A-07）。管理员对活动
+    的工具是「下线 / 恢复」、对账号的工具是「停用 / 恢复」，都不经过这条装饰器。
 
     get_owner_id 是一个函数，接收调用视图时的参数，返回该资源拥有者的 user.id。
 
@@ -102,16 +106,15 @@ def owner_required(get_owner_id):
         def wrapper(*args, **kwargs):
             if not current_user.is_authenticated:
                 return _deny_anonymous()
-            # 管理员对全部资源放行；其他角色必须是自己创建的
-            if current_user.role != Role.ADMIN:
-                call_kwargs = (
-                    kwargs
-                    if accepts_any_keyword
-                    else {key: value for key, value in kwargs.items() if key in declared_names}
-                )
-                owner_id = get_owner_id(*args, **call_kwargs)
-                if owner_id != current_user.id:
-                    abort(403)
+            # 一律要求「当前用户就是资源的所有者」，没有任何角色豁免
+            call_kwargs = (
+                kwargs
+                if accepts_any_keyword
+                else {key: value for key, value in kwargs.items() if key in declared_names}
+            )
+            owner_id = get_owner_id(*args, **call_kwargs)
+            if owner_id != current_user.id:
+                abort(403)
             return view(*args, **kwargs)
 
         return wrapper

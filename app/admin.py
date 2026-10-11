@@ -1,13 +1,15 @@
-"""管理员后台。
+"""管理员后台（V2.0）。
 
-四件事：
+四件事——注意边界：**管理员不介入具体报名、不代替教师编辑活动内容**
+（需求分析 3.1、A-07）。他能做的是平台级的状态处理：
 
-* 审核中心 —— 待审核队列 + 只追加的审核日志；
-* 全部活动 —— 按状态筛选、强制取消；
+* 账号管理 —— 创建账号、调整角色、停用 / 恢复账号；
+* 活动监督 —— 查看平台全部活动，对违规或明显错误的活动下线 / 恢复展示；
 * 分类管理 —— 增删改，删除前校验是否仍被活动引用；
-* 用户与角色 —— 创建账号、调整角色、停用账号。
+* 密码找回 —— 处理「忘记密码」申请。
 
-另外还保留了 M0 就有的「忘记密码」找回申请处理。
+V1.0 的「审核中心（审核教师的发布申请）」已经移除：V2.0 教师直接发布，
+审核发生在报名环节、由组织教师本人完成。
 """
 
 import secrets
@@ -28,10 +30,7 @@ from .extensions import db
 from .models import (
     Activity,
     ActivityStatus,
-    AuditAction,
-    AuditLog,
     Category,
-    Enrollment,
     PasswordResetRequest,
     ResetRequestStatus,
     Role,
@@ -39,6 +38,11 @@ from .models import (
     utcnow,
 )
 from .permissions import role_required
+from .services import (
+    latest_offline_records,
+    offline_activity as offline_service,
+    restore_activity as restore_service,
+)
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -71,10 +75,10 @@ def home():
         .where(PasswordResetRequest.status == ResetRequestStatus.PENDING)
     ).scalar_one()
 
-    pending_activities = db.session.execute(
+    offline_activities = db.session.execute(
         db.select(db.func.count())
         .select_from(Activity)
-        .where(Activity.status == ActivityStatus.PENDING)
+        .where(Activity.status == ActivityStatus.OFFLINE)
     ).scalar_one()
 
     user_count = db.session.execute(
@@ -84,79 +88,24 @@ def home():
     return render_template(
         "admin/home.html",
         pending_resets=pending_resets,
-        pending_activities=pending_activities,
+        offline_activities=offline_activities,
         user_count=user_count,
     )
 
 
 # ---------------------------------------------------------------------------
-# 审核中心
+# 活动监督（下线 / 恢复）
 # ---------------------------------------------------------------------------
-
-
-@bp.get("/audit")
-@role_required(Role.ADMIN)
-def audit_center():
-    """待审核队列 + 审核日志。
-
-    队列里带上「提交人」和「提交时间」——出问题时要知道找谁；
-    日志是只追加的，谁在什么时候批了什么，翻日志就能查到。
-    """
-    pending = (
-        db.session.execute(
-            db.select(Activity)
-            .where(Activity.status == ActivityStatus.PENDING)
-            .order_by(Activity.created_at)
-        )
-        .scalars()
-        .all()
-    )
-
-    # 一次查出这些活动的全部 SUBMIT 记录，避免在循环里逐个查（N+1）
-    submitted_at = {}
-    if pending:
-        logs = (
-            db.session.execute(
-                db.select(AuditLog)
-                .where(
-                    AuditLog.activity_id.in_([a.id for a in pending]),
-                    AuditLog.action == AuditAction.SUBMIT,
-                )
-                .order_by(AuditLog.created_at)
-            )
-            .scalars()
-            .all()
-        )
-        for log in logs:
-            # 取最后一次提交的时间：被驳回后重新提交的活动，应该显示新的提交时刻
-            submitted_at[log.activity_id] = log.created_at
-
-    logs = (
-        db.session.execute(
-            db.select(AuditLog).order_by(AuditLog.created_at.desc()).limit(30)
-        )
-        .scalars()
-        .all()
-    )
-
-    return render_template(
-        "admin/audit.html",
-        pending=pending,
-        submitted_at=submitted_at,
-        logs=logs,
-        action_labels={
-            AuditAction.SUBMIT: "提交审核",
-            AuditAction.APPROVE: "审核通过",
-            AuditAction.REJECT: "审核驳回",
-            AuditAction.CANCEL: "取消活动",
-        },
-    )
 
 
 @bp.get("/activities")
 @role_required(Role.ADMIN)
 def all_activities():
-    """全部活动，可按状态筛选。"""
+    """平台全部活动，可按状态筛选。
+
+    这是管理员在活动上的**唯一入口**：查看 + 状态处理（下线 / 恢复）。
+    点进详情页只能看信息，不能替教师改内容、不能动报名记录。
+    """
     status = request.args.get("status") or ""
     page = request.args.get("page", type=int) or 1
     keyword = (request.args.get("keyword") or "").strip()
@@ -176,13 +125,53 @@ def all_activities():
         error_out=False,
     )
 
+    activities = pagination.items
+
     return render_template(
         "admin/activities.html",
         pagination=pagination,
-        activities=pagination.items,
+        activities=activities,
         current_status=status,
         keyword=keyword,
+        status_labels=ActivityStatus.LABELS,
+        offinable_statuses=ActivityStatus.OFFINABLE,
+        # 被下线的活动要显示「处理标记」：谁、什么时候、为什么（TC-14）
+        offline_records=latest_offline_records([a.id for a in activities]),
     )
+
+
+@bp.post("/activities/<int:activity_id>/offline")
+@role_required(Role.ADMIN)
+def offline_activity(activity_id):
+    """下线违规或明显错误的活动。
+
+    只改展示状态，**不删数据、不改内容、不动报名记录**（DEC-5）：
+    学生端不再展示、不能报名；教师端仍可见并带着处理标记。
+    """
+    activity = db.session.get(Activity, activity_id)
+    if activity is None:
+        abort(404)
+
+    ok, message = offline_service(
+        activity, current_user.id, request.form.get("reason")
+    )
+    flash(message or "活动已下线，学生端不再展示。", "info" if ok else "warning")
+    return redirect(request.form.get("next") or url_for("admin.all_activities"))
+
+
+@bp.post("/activities/<int:activity_id>/restore")
+@role_required(Role.ADMIN)
+def restore_activity(activity_id):
+    """恢复被下线的活动（按时间重新定位到已发布 / 进行中 / 已结束）。"""
+    activity = db.session.get(Activity, activity_id)
+    if activity is None:
+        abort(404)
+
+    ok, message = restore_service(
+        activity, current_user.id, request.form.get("reason")
+    )
+    flash(message or "活动已恢复展示。", "success" if ok else "warning")
+    return redirect(request.form.get("next") or url_for("admin.all_activities"))
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +369,7 @@ def update_user(user_id):
     * 不能停用或降级**自己的**账号；
     * 不能把**最后一个**管理员降级或停用。
 
-    这两条都不是产品文档要求的，但没有它们，管理员点错一下系统就没人能管了，
+    这两条都不是需求文档要求的，但没有它们，管理员点错一下系统就没人能管了，
     而且是不可逆的——重装数据库才能救回来。
     """
     user = db.session.get(User, user_id)

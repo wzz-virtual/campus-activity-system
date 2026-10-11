@@ -1,12 +1,25 @@
-"""主页面路由：首页、工作台、社团工作台、健康检查。"""
+"""主页面路由：首页、工作台、教师工作台、健康检查。"""
 
 from flask import Blueprint, render_template
 from flask_login import current_user, login_required
 
 from .extensions import db
-from .models import Activity, ActivityStatus, Role, Enrollment, EnrollStatus, utcnow
+from .models import (
+    Activity,
+    ActivityStatus,
+    EnrollStatus,
+    Enrollment,
+    Role,
+    User,
+    utcnow,
+)
 from .permissions import role_required
-from .services import activity_stats
+from .services import (
+    activity_stats,
+    pending_count,
+    waitlist_count,
+    waitlist_position,
+)
 
 bp = Blueprint("main", __name__)
 
@@ -45,9 +58,9 @@ def index():
 @login_required
 def dashboard():
     """工作台。三种角色看到的内容不一样。"""
-    context = {"stats": None}
+    context = {}
 
-    if current_user.is_club:
+    if current_user.is_teacher:
         activities = (
             db.session.execute(
                 db.select(Activity).where(Activity.organizer_id == current_user.id)
@@ -56,13 +69,19 @@ def dashboard():
             .all()
         )
         context["counts"] = _status_counts(activities)
-        context["overview"] = _club_overview(activities)
+        context["overview"] = _teacher_overview(activities)
+        # 有人等着处理时，工作台上要第一眼看见
+        context["pending_total"] = sum(pending_count(a.id) for a in activities)
+        context["waitlist_total"] = sum(waitlist_count(a.id) for a in activities)
 
     elif current_user.is_admin:
-        context["pending_count"] = db.session.execute(
+        context["user_count"] = db.session.execute(
+            db.select(db.func.count()).select_from(User)
+        ).scalar_one()
+        context["offline_count"] = db.session.execute(
             db.select(db.func.count())
             .select_from(Activity)
-            .where(Activity.status == ActivityStatus.PENDING)
+            .where(Activity.status == ActivityStatus.OFFLINE)
         ).scalar_one()
 
     else:
@@ -71,7 +90,7 @@ def dashboard():
                 db.select(Enrollment)
                 .where(
                     Enrollment.user_id == current_user.id,
-                    Enrollment.status == EnrollStatus.ENROLLED,
+                    Enrollment.status.in_(EnrollStatus.ACTIVE),
                 )
                 .order_by(Enrollment.enrolled_at.desc())
                 .limit(5)
@@ -79,19 +98,24 @@ def dashboard():
             .scalars()
             .all()
         )
+        context["waitlist_positions"] = {
+            row.id: waitlist_position(row)
+            for row in context["my_enrollments"]
+            if row.status == EnrollStatus.WAITLISTED
+        }
 
     return render_template("main/dashboard.html", **context)
 
 
 def _status_counts(activities):
-    """按状态统计数量，用于社团工作台的分组概览。"""
+    """按状态统计数量，用于教师工作台的分组概览。"""
     counts = {status: 0 for status in ActivityStatus.ALL}
     for activity in activities:
         counts[activity.status] += 1
     return counts
 
 
-def _club_overview(activities):
+def _teacher_overview(activities):
     total_enrolled = sum(a.enrolled_count for a in activities)
     total_checked = sum(activity_stats(a)["checked_in"] for a in activities)
     rate = round(total_checked * 100.0 / total_enrolled, 1) if total_enrolled else 0.0
@@ -103,13 +127,13 @@ def _club_overview(activities):
     }
 
 
-@bp.get("/club/")
-@role_required(Role.CLUB)
-def club_home():
-    """社团工作台。
+@bp.get("/teacher/")
+@role_required(Role.TEACHER)
+def teacher_home():
+    """教师工作台。
 
-    这里刻意**不等于**管理员后台：管理员能管全部活动，但不借用社团身份去看
-    社团的页面。权限边界一旦模糊，后面每加一个功能都要重新想一遍谁能用。
+    这里刻意**不等于**管理员后台：管理员能监督全部活动，但不借用教师的身份
+    去看教师的报名名单。权限边界一旦模糊，后面每加一个功能都要重新想一遍谁能用。
     """
     activities = (
         db.session.execute(
@@ -122,11 +146,13 @@ def club_home():
     )
 
     return render_template(
-        "main/club.html",
+        "main/teacher.html",
         activities=activities,
         counts=_status_counts(activities),
-        overview=_club_overview(activities),
+        overview=_teacher_overview(activities),
         status_labels=ActivityStatus.LABELS,
+        pending_counts={a.id: pending_count(a.id) for a in activities},
+        waitlist_counts={a.id: waitlist_count(a.id) for a in activities},
     )
 
 

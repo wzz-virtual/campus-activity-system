@@ -1,4 +1,4 @@
-"""活动：创建、编辑、列表、详情、审核流转，以及报名与签到的入口。
+"""活动：创建、编辑、发布、列表、详情，以及报名 / 候补 / 审核 / 签到的入口。
 
 路由分两类：
 
@@ -10,6 +10,11 @@
 
 权限的做法统一为：装饰器拦第一道（角色 / 归属权），视图里再按**状态**拦第二道。
 前端把按钮藏起来不算权限控制——改一个请求就能绕过。
+
+V2.0 的变化：
+* 发布不再经过管理员审核（`publish` 直接由组织教师完成）；
+* 新增报名审核（教师对本人活动的「待审核」申请逐条处理）；
+* 名单页分成「待审核 / 正式 / 候补」三段。
 """
 
 from datetime import timedelta
@@ -30,8 +35,6 @@ from .extensions import db
 from .models import (
     Activity,
     ActivityStatus,
-    AuditAction,
-    AuditLog,
     Category,
     EnrollStatus,
     Enrollment,
@@ -43,8 +46,8 @@ from .services import (
     CANCEL_LOCK_HOURS,
     CHECK_IN_STATE_LABELS,
     CHECK_IN_STATE_STYLES,
+    ENROLL_STATUS_STYLES,
     activity_stats,
-    approve_activity as approve_activity_service,
     cancel_activity as cancel_activity_service,
     cancel_blocked_reason,
     cancel_deadline_text,
@@ -55,14 +58,21 @@ from .services import (
     collect_activity_form,
     edit_blocked_reason,
     enroll,
+    enroll_allowed_reason,
     enroll_blocked_reason,
+    latest_offline_record,
+    latest_offline_records,
     open_check_in as open_check_in_service,
     organizer_overview,
-    reject_activity as reject_activity_service,
+    pending_count,
+    promote_waitlist,
+    publish_activity,
+    review_enrollment,
     set_check_in,
-    submit_for_review,
     validate_activity_form,
-    withdraw_to_draft,
+    waitlist_count,
+    waitlist_position,
+    waitlist_query,
 )
 from .timeutils import format_local_input, utc_iso
 
@@ -94,7 +104,7 @@ def visible_activity_or_404(activity_id):
     """按可见性取活动。
 
     普通学生只能看到 `已发布 / 进行中 / 已结束 / 已取消` 这四种状态。
-    草稿、待审核、已驳回对创建者和管理员以外的人**完全不可见**——
+    草稿、**已下线**对创建者和管理员以外的人**完全不可见**——
     不是"看得到但点不动"，是根本拿不到。
     """
     activity = get_activity_or_404(activity_id)
@@ -146,7 +156,7 @@ def _categories():
 def list_activities():
     """活动广场。
 
-    * 只展示对学生可见的状态；
+    * 只展示对学生可见的状态（**被管理员下线的活动不在其中**）；
     * 支持分类 / 状态 / 关键词筛选；
     * **必须分页**，不允许一次查出全表。
     """
@@ -184,12 +194,21 @@ def list_activities():
     )
 
     now = utcnow()
+    activities = pagination.items
+    my_enrollments = _my_enrollment_map([a.id for a in activities])
+
     return render_template(
         "activities/list.html",
         pagination=pagination,
-        activities=pagination.items,
+        activities=activities,
         categories=_categories(),
-        my_enrollments=_my_enrollment_map([a.id for a in pagination.items]),
+        my_enrollments=my_enrollments,
+        # 候补排位只在「我的报名」里算一次太零散，这里按需补上
+        waitlist_positions={
+            activity_id: waitlist_position(enrollment)
+            for activity_id, enrollment in my_enrollments.items()
+            if enrollment.status == EnrollStatus.WAITLISTED
+        },
         current_category=category_id,
         current_status=status,
         keyword=keyword,
@@ -214,7 +233,7 @@ def _form_context(activity, raw, errors):
 
 
 @bp.get("/activities/new")
-@role_required(Role.CLUB, Role.ADMIN)
+@role_required(Role.TEACHER)
 def new_activity():
     categories = _categories()
     if not categories:
@@ -239,22 +258,22 @@ def _apply_form(activity, parsed):
         "start_time",
         "end_time",
         "enroll_deadline",
+        "requires_review",
+        "qualification",
     ):
         setattr(activity, name, parsed[name])
 
 
 @bp.post("/activities")
-@role_required(Role.CLUB, Role.ADMIN)
+@role_required(Role.TEACHER)
 def create_activity():
     """创建活动。
 
     两种提交方式：
 
-    * ``action=draft`` —— 存草稿，先不惊动管理员；
-    * ``action=submit`` —— 社团提交审核（进 `PENDING`），管理员直接发布（进 `PUBLISHED`）。
-
-    管理员创建的活动**跳过审核**，这个判断只看 ``current_user.role``，
-    而角色只能来自数据库——登录表单里多传一个 ``role=ADMIN`` 不会有任何效果。
+    * ``action=draft`` —— 存草稿，字段可以先不填全；
+    * 直接提交 —— **创建即发布**（V2.0 没有管理员审核环节，教师自己就是
+      发布者，事后由管理员监督）。
     """
     raw = collect_activity_form(request.form)
     categories = _categories()
@@ -270,39 +289,19 @@ def create_activity():
             "activities/form.html", **_form_context(None, raw, errors)
         ), 400
 
-    if wants_draft and not current_user.is_club:
-        flash("只有社团账号需要存草稿，管理员创建的活动直接发布。", "warning")
-        return redirect(url_for("activities.new_activity"))
-
     activity = Activity(organizer_id=current_user.id, enrolled_count=0)
     if wants_draft:
         # 草稿允许字段不完整，所以用「缺什么补什么」的默认值兜底，
-        # 强制校验留到提交审核那一步再做。
+        # 强制校验留到发布那一步再做。
         _apply_form(activity, _draft_defaults(parsed))
         activity.status = ActivityStatus.DRAFT
-        flash("已存为草稿，可以稍后继续编辑或提交审核。", "success")
+        flash("已存为草稿，可以稍后继续编辑或发布。", "success")
     else:
         _apply_form(activity, parsed)
-        if current_user.is_admin:
-            activity.status = ActivityStatus.PUBLISHED
-            activity.approved_by = current_user.id
-            activity.approved_at = utcnow()
-            flash("活动已直接发布。", "success")
-        else:
-            activity.status = ActivityStatus.PENDING
-            flash("活动已提交审核，管理员通过后就会出现在活动广场。", "success")
+        activity.status = ActivityStatus.PUBLISHED
+        flash("活动已发布，学生现在就能在活动广场看到它。", "success")
 
     db.session.add(activity)
-    db.session.flush()
-    if activity.status == ActivityStatus.PENDING:
-        # 首次提交也是审核流的一环，同样要留痕
-        db.session.add(
-            AuditLog(
-                activity_id=activity.id,
-                operator_id=current_user.id,
-                action=AuditAction.SUBMIT,
-            )
-        )
     db.session.commit()
 
     return redirect(url_for("activities.activity_detail", activity_id=activity.id))
@@ -312,7 +311,7 @@ def _draft_defaults(parsed):
     """草稿的兜底值。
 
     数据库里这些列都是 NOT NULL，但草稿本来就允许没填完，
-    所以缺的字段先塞一个占位值，等真正提交审核时再要求填全。
+    所以缺的字段先塞一个占位值，等真正发布时再要求填全。
     """
     filled = {
         "title": parsed.get("title") or "（未命名草稿）",
@@ -324,6 +323,8 @@ def _draft_defaults(parsed):
         "start_time": parsed.get("start_time"),
         "end_time": parsed.get("end_time"),
         "enroll_deadline": parsed.get("enroll_deadline"),
+        "requires_review": parsed.get("requires_review", False),
+        "qualification": parsed.get("qualification"),
     }
     fallback = utcnow()
     for name in ("start_time", "end_time", "enroll_deadline"):
@@ -361,6 +362,8 @@ def edit_activity(activity_id):
         "enroll_deadline": format_local_input(activity.enroll_deadline),
         "location": activity.location or "",
         "capacity": str(activity.capacity),
+        "qualification": activity.qualification or "",
+        "requires_review": "1" if activity.requires_review else "",
     }
     return render_template("activities/form.html", **_form_context(activity, raw, {}))
 
@@ -386,6 +389,9 @@ def update_activity(activity_id):
         ), 400
 
     _apply_form(activity, parsed)
+    # 上限可能被调大——多出来的余位要立刻喂给候补队列，
+    # 否则会出现「明明有空位、队列里还有人等」的违约状态（BR-6）。
+    promote_waitlist(activity.id)
     db.session.commit()
     flash("活动信息已更新。", "success")
     return redirect(url_for("activities.activity_detail", activity_id=activity.id))
@@ -397,7 +403,7 @@ def delete_activity(activity_id):
     """删除草稿。只有草稿能删——已发布的活动一旦有人报名，删掉就是毁数据。"""
     activity = get_activity_or_404(activity_id)
     if activity.status != ActivityStatus.DRAFT:
-        flash("只有草稿可以删除。已提交过的活动请使用「取消活动」。", "warning")
+        flash("只有草稿可以删除。已发布的活动请使用「取消活动」。", "warning")
         return redirect(url_for("activities.activity_detail", activity_id=activity_id))
 
     db.session.delete(activity)
@@ -425,42 +431,70 @@ def activity_detail(activity_id):
         ).scalar_one_or_none()
 
     now = utcnow()
-    can_enroll = False
+    enrollment_active = enrollment is not None and enrollment.is_active
+
     blocked_reason = None
+    can_enroll = False
+    enroll_action = None
     if not current_user.is_authenticated:
         blocked_reason = "请先登录后再报名"
-    elif enrollment is not None and enrollment.status == EnrollStatus.ENROLLED:
+    elif enrollment_active:
         blocked_reason = None
     else:
         # 这里只是**提前告知**按钮状态。真正的判断在 services.enroll() 里，
         # 提交时还会在数据库层再判一次——前端提示不能当作校验。
         blocked_reason = enroll_blocked_reason(activity.id, now)
         can_enroll = blocked_reason is None
+        if can_enroll:
+            # 按钮文案按「会走到哪条路径」来给，别让人点了才知道结果：
+            # 需审核 → 提交申请；满员 → 加入候补；否则 → 直接报名
+            if activity.requires_review:
+                enroll_action = "apply"
+            elif activity.is_full:
+                enroll_action = "waitlist"
+            else:
+                enroll_action = "enroll"
 
     cancel_reason = None
-    if enrollment is not None and enrollment.status == EnrollStatus.ENROLLED:
+    cancel_until = None
+    position = None
+    if enrollment_active:
         cancel_reason = cancel_blocked_reason(activity, enrollment, now)
+        if enrollment.status == EnrollStatus.CONFIRMED:
+            # 只有正式报名有「取消截止」的概念（名单锁定窗口）
+            cancel_until = cancel_deadline_text(activity) if cancel_reason is None else None
+        elif enrollment.status == EnrollStatus.WAITLISTED:
+            position = waitlist_position(enrollment)
+
+    is_organizer = (
+        current_user.is_authenticated and activity.organizer_id == current_user.id
+    )
 
     return render_template(
         "activities/detail.html",
         activity=activity,
         enrollment=enrollment,
+        enrollment_active=enrollment_active,
         can_enroll=can_enroll,
+        enroll_action=enroll_action,
         blocked_reason=blocked_reason,
         cancel_reason=cancel_reason,
-        cancel_until=cancel_deadline_text(activity)
-        if cancel_reason is None
+        cancel_until=cancel_until,
+        waitlist_position=position,
+        check_in_state=check_in_state(activity, enrollment, now)
+        if enrollment_active and enrollment.status == EnrollStatus.CONFIRMED
         else None,
-        check_in_state=check_in_state(activity, enrollment, now),
         check_in_state_labels=CHECK_IN_STATE_LABELS,
         check_in_state_styles=CHECK_IN_STATE_STYLES,
-        stats=activity_stats(activity)
-        if current_user.is_authenticated
-        and (current_user.is_admin or activity.organizer_id == current_user.id)
+        enroll_status_styles=ENROLL_STATUS_STYLES,
+        stats=activity_stats(activity) if is_organizer else None,
+        can_edit=current_user.is_authenticated
+        and can_edit_activity(current_user, activity),
+        is_organizer=is_organizer,
+        offline_record=latest_offline_record(activity.id)
+        if activity.status == ActivityStatus.OFFLINE
         else None,
-        can_edit=current_user.is_authenticated and can_edit_activity(current_user, activity),
-        can_manage=current_user.is_authenticated
-        and (current_user.is_admin or activity.organizer_id == current_user.id),
+        offinable_statuses=ActivityStatus.OFFINABLE,
         status_labels=ActivityStatus.LABELS,
         now=now,
     )
@@ -471,42 +505,13 @@ def activity_detail(activity_id):
 # ---------------------------------------------------------------------------
 
 
-@bp.post("/activities/<int:activity_id>/submit")
+@bp.post("/activities/<int:activity_id>/publish")
 @owner_required(lambda activity_id: get_activity_or_404(activity_id).organizer_id)
-def submit_activity(activity_id):
+def publish(activity_id):
     activity = get_activity_or_404(activity_id)
-    ok, message = submit_for_review(activity, current_user.id)
-    flash(message or "已提交审核，请等待管理员处理。", "success" if ok else "warning")
+    ok, message = publish_activity(activity, current_user.id)
+    flash(message or "活动已发布。", "success" if ok else "warning")
     return redirect(url_for("activities.activity_detail", activity_id=activity_id))
-
-
-@bp.post("/activities/<int:activity_id>/withdraw")
-@owner_required(lambda activity_id: get_activity_or_404(activity_id).organizer_id)
-def withdraw_activity(activity_id):
-    activity = get_activity_or_404(activity_id)
-    ok, message = withdraw_to_draft(activity)
-    flash(message or "已撤回为草稿。", "info" if ok else "warning")
-    return redirect(url_for("activities.activity_detail", activity_id=activity_id))
-
-
-@bp.post("/activities/<int:activity_id>/approve")
-@role_required(Role.ADMIN)
-def approve_activity(activity_id):
-    activity = get_activity_or_404(activity_id)
-    ok, message = approve_activity_service(activity, current_user.id)
-    flash(message or "已通过审核，活动已在活动广场发布。", "success" if ok else "warning")
-    return redirect(request.form.get("next") or url_for("admin.audit_center"))
-
-
-@bp.post("/activities/<int:activity_id>/reject")
-@role_required(Role.ADMIN)
-def reject_activity(activity_id):
-    activity = get_activity_or_404(activity_id)
-    ok, message = reject_activity_service(
-        activity, current_user.id, request.form.get("reason")
-    )
-    flash(message or "已驳回，原因已记录并可被创建者看到。", "info" if ok else "danger")
-    return redirect(request.form.get("next") or url_for("admin.audit_center"))
 
 
 @bp.post("/activities/<int:activity_id>/cancel")
@@ -521,17 +526,19 @@ def cancel_activity(activity_id):
 
 
 # ---------------------------------------------------------------------------
-# 报名与取消报名
+# 报名 / 取消 / 退出候补 / 撤销申请
 # ---------------------------------------------------------------------------
 
 
 @bp.post("/activities/<int:activity_id>/enroll")
 @login_required
 def enroll_activity(activity_id):
+    """报名。结果是哪一种（正式 / 候补 / 待审核），由业务层决定，
+    提示语直接用它返回的文案——三种结果的语气完全不同。"""
     get_activity_or_404(activity_id)
     ok, message = enroll(activity_id, current_user.id)
     if ok:
-        flash("报名成功，名额已为你保留。", "success")
+        flash(message, "success")
     else:
         flash(message, "warning")
     return redirect(url_for("activities.activity_detail", activity_id=activity_id))
@@ -540,10 +547,11 @@ def enroll_activity(activity_id):
 @bp.post("/activities/<int:activity_id>/unenroll")
 @login_required
 def unenroll_activity(activity_id):
+    """取消报名 / 退出候补 / 撤销申请，统一走这一个入口。"""
     get_activity_or_404(activity_id)
     ok, message = cancel_enrollment(activity_id, current_user.id)
     if ok:
-        flash("已取消报名，名额已释放。", "info")
+        flash("已取消，名额已释放给候补队列。", "info")
     else:
         flash(message, "warning")
     return redirect(url_for("activities.activity_detail", activity_id=activity_id))
@@ -552,7 +560,8 @@ def unenroll_activity(activity_id):
 @bp.get("/my/enrollments")
 @login_required
 def my_enrollments():
-    """我的报名。逐条给出签到状态，并把「还能不能取消」和原因写清楚。"""
+    """我的报名。逐条给出状态（含候补排位、审核时间），并把
+    「还能不能取消 / 退出」和原因写清楚。"""
     now = utcnow()
     enrollments = (
         db.session.execute(
@@ -567,18 +576,27 @@ def my_enrollments():
     rows = []
     for enrollment in enrollments:
         activity = enrollment.activity
+        active = enrollment.is_active
         rows.append(
             {
                 "enrollment": enrollment,
                 "activity": activity,
-                "state": check_in_state(activity, enrollment, now),
+                "state": check_in_state(activity, enrollment, now)
+                if enrollment.status == EnrollStatus.CONFIRMED
+                else None,
+                "waitlist_position": waitlist_position(enrollment)
+                if enrollment.status == EnrollStatus.WAITLISTED
+                else None,
                 "cancel_reason": cancel_blocked_reason(activity, enrollment, now)
-                if enrollment.status == EnrollStatus.ENROLLED
+                if active
                 else None,
-                # 还能取消时，明确写出可以反悔到什么时候
+                # 还能取消时，明确写出可以反悔到什么时候（只对正式有意义）
                 "cancel_until": cancel_deadline_text(activity)
-                if enrollment.status == EnrollStatus.ENROLLED
+                if enrollment.status == EnrollStatus.CONFIRMED
                 else None,
+                # 已拒绝 / 已取消之后，条件允许就能重新报名（DEC-3）
+                "can_reapply": (not active)
+                and enroll_allowed_reason(activity, now) is None,
             }
         )
 
@@ -587,19 +605,20 @@ def my_enrollments():
         rows=rows,
         state_labels=CHECK_IN_STATE_LABELS,
         state_styles=CHECK_IN_STATE_STYLES,
+        enroll_status_styles=ENROLL_STATUS_STYLES,
         cancel_lock_hours=CANCEL_LOCK_HOURS,
     )
 
 
 # ---------------------------------------------------------------------------
-# 我的活动（创建者视角）
+# 我的活动（组织教师视角）
 # ---------------------------------------------------------------------------
 
 
 @bp.get("/my/activities")
-@role_required(Role.CLUB, Role.ADMIN)
+@role_required(Role.TEACHER)
 def my_activities():
-    """我的活动。按状态分组，并按状态给出这一状态下能做的操作。"""
+    """我的活动。按状态分组，并把「哪些活动有申请等着处理」标出来。"""
     activities = (
         db.session.execute(
             db.select(Activity)
@@ -625,6 +644,9 @@ def my_activities():
         groups=ordered_groups,
         total=len(activities),
         status_labels=ActivityStatus.LABELS,
+        pending_counts={a.id: pending_count(a.id) for a in activities},
+        waitlist_counts={a.id: waitlist_count(a.id) for a in activities},
+        offline_records=latest_offline_records([a.id for a in activities]),
     )
 
 
@@ -667,16 +689,16 @@ def check_in(activity_id):
 
 
 # ---------------------------------------------------------------------------
-# 报名名单 / 核验签到 / 统计 / 导出（仅创建者与管理员）
+# 报名名单 / 审核报名 / 核验签到 / 统计 / 导出（仅组织教师本人）
 # ---------------------------------------------------------------------------
 
 
 @bp.get("/activities/<int:activity_id>/enrollments")
 @owner_required(lambda activity_id: get_activity_or_404(activity_id).organizer_id)
 def activity_roster(activity_id):
-    """报名名单 + 签到核验。
+    """报名名单：**待审核 / 正式 / 候补三段分列**（FR-7.4）。
 
-    两条签到通道并存：组织者在名单上手动勾选（小活动最快），
+    两条签到通道并存：组织者在正式名单上手动勾选（小活动最快），
     学生用 6 位签到码自助签到（几百人也不排队）。
     """
     # 页面上的活动切换器在没有脚本时靠表单 GET 提交，这里把它转成一次跳转，
@@ -687,17 +709,35 @@ def activity_roster(activity_id):
 
     activity = get_activity_or_404(activity_id)
 
-    enrollments = (
+    pending = (
         db.session.execute(
             db.select(Enrollment)
             .where(
                 Enrollment.activity_id == activity.id,
-                Enrollment.status == EnrollStatus.ENROLLED,
+                Enrollment.status == EnrollStatus.PENDING,
             )
             .order_by(Enrollment.enrolled_at)
         )
         .scalars()
         .all()
+    )
+
+    confirmed = (
+        db.session.execute(
+            db.select(Enrollment)
+            .where(
+                Enrollment.activity_id == activity.id,
+                Enrollment.status == EnrollStatus.CONFIRMED,
+            )
+            .order_by(Enrollment.enrolled_at)
+        )
+        .scalars()
+        .all()
+    )
+
+    # 候补按队列顺序展示（进入候补的时间，先到先得）
+    waitlisted = (
+        db.session.execute(waitlist_query(activity.id)).scalars().all()
     )
 
     # 页面上的活动切换器：让组织者不必退回列表再点进来
@@ -717,10 +757,36 @@ def activity_roster(activity_id):
     return render_template(
         "activities/roster.html",
         activity=activity,
-        enrollments=enrollments,
+        pending=pending,
+        confirmed=confirmed,
+        waitlisted=waitlisted,
         stats=activity_stats(activity),
         siblings=siblings,
     )
+
+
+@bp.post("/activities/<int:activity_id>/enrollments/<int:user_id>/approve")
+@owner_required(lambda activity_id: get_activity_or_404(activity_id).organizer_id)
+def approve_enrollment(activity_id, user_id):
+    """审核通过一条报名申请。
+
+    通过 ≠ 正式：学生能否立刻占上名额取决于**审批那一刻**的余位，
+    这个判断在业务层里用原子占位完成，视图层不重复实现。
+    """
+    get_activity_or_404(activity_id)
+    ok, message = review_enrollment(activity_id, user_id, current_user.id, True)
+    flash(message, "success" if ok else "warning")
+    return redirect(url_for("activities.activity_roster", activity_id=activity_id))
+
+
+@bp.post("/activities/<int:activity_id>/enrollments/<int:user_id>/reject")
+@owner_required(lambda activity_id: get_activity_or_404(activity_id).organizer_id)
+def reject_enrollment(activity_id, user_id):
+    """拒绝一条报名申请。拒绝是终态：本次不能参加，也不进入候补。"""
+    get_activity_or_404(activity_id)
+    ok, message = review_enrollment(activity_id, user_id, current_user.id, False)
+    flash(message, "info" if ok else "warning")
+    return redirect(url_for("activities.activity_roster", activity_id=activity_id))
 
 
 @bp.post("/activities/<int:activity_id>/enrollments/<int:user_id>/check-in")
@@ -778,7 +844,7 @@ def _csv_cell(value):
 @bp.get("/activities/<int:activity_id>/enrollments/export")
 @owner_required(lambda activity_id: get_activity_or_404(activity_id).organizer_id)
 def export_enrollments(activity_id):
-    """导出报名名单为 CSV。
+    """导出报名名单（含待审核与候补，用「状态」列区分）为 CSV。
 
     ⚠️ **必须带 UTF-8 BOM**。不带 BOM 的 UTF-8 文件，Excel 会按本地编码
     （简体中文 Windows 上是 GBK）去读，中文全部变成乱码。BOM 就是那几个
@@ -791,19 +857,34 @@ def export_enrollments(activity_id):
             db.select(Enrollment)
             .where(
                 Enrollment.activity_id == activity.id,
-                Enrollment.status == EnrollStatus.ENROLLED,
+                Enrollment.status.in_(EnrollStatus.ACTIVE),
             )
-            .order_by(Enrollment.enrolled_at)
         )
         .scalars()
         .all()
     )
 
-    rows = [["序号", "学号", "姓名", "报名时间", "签到状态", "签到时间"]]
+    # 正式在前（要带去现场点名的就是这批人），然后待审核、最后候补；
+    # 候补内部严格按队列顺序（进入候补时间）。
+    priority = {
+        EnrollStatus.CONFIRMED: 0,
+        EnrollStatus.PENDING: 1,
+        EnrollStatus.WAITLISTED: 2,
+    }
+    enrollments.sort(
+        key=lambda e: (
+            priority.get(e.status, 9),
+            e.waitlisted_at if e.status == EnrollStatus.WAITLISTED else e.enrolled_at,
+            e.id,
+        )
+    )
+
+    rows = [["序号", "状态", "学号", "姓名", "报名时间", "签到状态", "签到时间"]]
     for index, enrollment in enumerate(enrollments, start=1):
         rows.append(
             [
                 index,
+                enrollment.status_label,
                 enrollment.user.student_no,
                 enrollment.user.name,
                 utc_iso(enrollment.enrolled_at),
@@ -824,16 +905,16 @@ def export_enrollments(activity_id):
     )
 
 
-@bp.get("/club/enrollments")
-@role_required(Role.CLUB, Role.ADMIN)
-def club_enrollments():
+@bp.get("/teacher/enrollments")
+@role_required(Role.TEACHER)
+def teacher_enrollments():
     """「报名与签到」入口：自动跳到最需要处理的那场活动。"""
     return _redirect_to_activity("activities.activity_roster")
 
 
-@bp.get("/club/stats")
-@role_required(Role.CLUB, Role.ADMIN)
-def club_stats():
+@bp.get("/teacher/stats")
+@role_required(Role.TEACHER)
+def teacher_stats():
     """「数据统计」入口：全部活动的汇总 + 分活动明细。"""
     activities = (
         db.session.execute(
@@ -857,15 +938,15 @@ def _redirect_to_activity(endpoint):
     """挑一场最相关的活动跳过去：进行中 > 已发布 > 已结束 > 其它。
 
     组织者最常要做的是「正在进行的活动核验签到」，其次才是看下一场的报名情况。
+    有「待审核申请」的已发布活动排在前面——有人等着处理，是最该先看到的。
     """
     priority = {
         ActivityStatus.ONGOING: 0,
         ActivityStatus.PUBLISHED: 1,
         ActivityStatus.FINISHED: 2,
-        ActivityStatus.PENDING: 3,
-        ActivityStatus.DRAFT: 4,
-        ActivityStatus.REJECTED: 5,
-        ActivityStatus.CANCELED: 6,
+        ActivityStatus.DRAFT: 3,
+        ActivityStatus.OFFLINE: 4,
+        ActivityStatus.CANCELED: 5,
     }
     activities = (
         db.session.execute(
@@ -879,5 +960,9 @@ def _redirect_to_activity(endpoint):
             "activities/no_activity.html", endpoint=endpoint
         )
 
-    activities.sort(key=lambda a: (priority.get(a.status, 9), a.start_time))
+    def sort_key(activity):
+        pending = pending_count(activity.id)
+        return (priority.get(activity.status, 9), -pending, activity.start_time)
+
+    activities.sort(key=sort_key)
     return redirect(url_for(endpoint, activity_id=activities[0].id))
