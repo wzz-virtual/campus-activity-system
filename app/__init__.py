@@ -104,7 +104,7 @@ def create_app(config_name=None, **overrides):
         """按时间把到点的活动推进到下一个状态。
 
         放在这里而不是定时任务里：状态完全由时间决定，读的时候现算一次即可，
-        不必为 MVP 引入一套调度器依赖。静态文件请求跳过，没必要为一张 CSS
+        不必为这套系统引入一套调度器依赖。静态文件请求跳过，没必要为一张 CSS
         去动数据库。
         """
         if request.endpoint == "static":
@@ -233,6 +233,23 @@ def create_app(config_name=None, **overrides):
         """根据模型建表。"""
         db.create_all()
         print("数据库表已创建")
+
+    @app.cli.command("upgrade-v2")
+    def upgrade_v2():
+        """把 V1.0 的数据库就地升级到 V2.0（幂等，可重复执行）。
+
+        V2.0 改了角色、活动状态与报名状态的取值，还添了几列。升级过程
+        不重建数据库——已有的账号、活动、报名记录一条不动，只做翻译。
+        """
+        from .migrations import upgrade_to_v2
+
+        notes = upgrade_to_v2()
+        if notes:
+            print("数据库已升级到 V2.0：")
+            for note in notes:
+                print(f"  - {note}")
+        else:
+            print("数据库结构已经是 V2.0，无需迁移。")
 
     @app.cli.command("seed-demo")
     @click.option(

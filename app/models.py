@@ -1,7 +1,14 @@
-"""数据模型。
+"""数据模型（V2.0）。
 
-对应设计方案 docs/mvp-design.md 第 5 节，共五张表：
-user / category / activity / enrollment / audit_log
+对应《实验2-需求分析.md》第四章「数据实体建议」，共六张表：
+user / category / activity / enrollment / audit_log / password_reset_request
+
+V2.0 相对 V1.0 的变化：
+1. 角色由「学生 / 社团 / 校级管理员」改为「学生 / **活动组织教师** / 系统管理员」；
+2. 活动去掉了「提交审核 / 通过 / 驳回」流程——教师直接发布，
+   管理员改为事后监督（下线 / 恢复展示）；
+3. 报名记录由两态扩展为**五态**（待审核 / 正式 / 候补 / 已拒绝 / 已取消），
+   新增「进入候补时间」与「审核时间」，支撑候补队列与报名审核。
 
 约定：
 1. 所有时间字段统一存 **UTC**，展示层再转本地时区。
@@ -28,67 +35,135 @@ def utcnow():
 
 
 class Role:
-    """用户角色。"""
+    """用户角色。
+
+    V2.0 的三类角色（见需求分析 1.3 与 3.1 权限矩阵）：
+
+    * 学生 —— 浏览、报名 / 候补、取消本人报名；
+    * 活动组织教师 —— 创建 / 发布 / 修改**本人负责**的活动，审核报名，管理名单；
+    * 系统管理员 —— 维护账号（停用 / 恢复）、监督活动（下线 / 恢复），
+      **不介入**具体报名、不代替教师编辑活动内容。
+    """
 
     STUDENT = "STUDENT"
-    CLUB = "CLUB"
+    TEACHER = "TEACHER"
     ADMIN = "ADMIN"
 
-    ALL = (STUDENT, CLUB, ADMIN)
+    ALL = (STUDENT, TEACHER, ADMIN)
 
     LABELS = {
         STUDENT: "学生",
-        CLUB: "社团",
-        ADMIN: "校级管理员",
+        TEACHER: "活动组织教师",
+        ADMIN: "系统管理员",
     }
 
 
 class ActivityStatus:
-    """活动状态机。流转规则见 docs/mvp-design.md 第 3 节。"""
+    """活动状态。
+
+    V2.0 **去掉了活动审核流**（V1.0 的「待审核 / 已驳回」不再存在）：
+    教师创建后直接发布，管理员的职责改为对违规活动的**下线 / 恢复**。
+
+    时间推进（`PUBLISHED → ONGOING → FINISHED`）的规则和 V1.0 一致，
+    见 ``services.sync_activity_statuses``。
+    """
 
     DRAFT = "DRAFT"
-    PENDING = "PENDING"
-    REJECTED = "REJECTED"
     PUBLISHED = "PUBLISHED"
     ONGOING = "ONGOING"
     FINISHED = "FINISHED"
+    # 管理员对违规或明显错误的活动做状态处理（A-07）
+    OFFLINE = "OFFLINE"
     CANCELED = "CANCELED"
 
-    ALL = (DRAFT, PENDING, REJECTED, PUBLISHED, ONGOING, FINISHED, CANCELED)
+    ALL = (DRAFT, PUBLISHED, ONGOING, FINISHED, OFFLINE, CANCELED)
 
     LABELS = {
         DRAFT: "草稿",
-        PENDING: "待审核",
-        REJECTED: "已驳回",
         PUBLISHED: "已发布",
         ONGOING: "进行中",
         FINISHED: "已结束",
+        OFFLINE: "已下线",
         CANCELED: "已取消",
     }
 
-    # 学生能看到的活动状态
+    # 学生能看到的活动状态。**已下线不在其中**：被处理的活动对
+    # 学生「不展示、不能报名」（TC-14），但对教师和创建者仍然可见。
     VISIBLE_TO_STUDENT = (PUBLISHED, ONGOING, FINISHED, CANCELED)
 
     # 允许学生报名的状态
     ENROLLABLE = (PUBLISHED,)
 
+    # 管理员可以执行「下线」的状态（草稿本就不对外，已取消没有必要）
+    OFFINABLE = (PUBLISHED, ONGOING, FINISHED)
+
 
 class EnrollStatus:
-    """报名记录状态。"""
+    """报名记录状态。
 
-    ENROLLED = "ENROLLED"
+    V2.0 五态（需求分析 4.3 的「状态词表」）：
+
+    * ``PENDING``    待审核 —— 需审核的活动，报名后的初始态；**不占**名额
+    * ``CONFIRMED``  正式   —— 占用一个名额
+    * ``WAITLISTED`` 候补   —— 未获得名额，按「进入候补时间」排队；**不占**名额
+    * ``REJECTED``   已拒绝 —— 终态，不符合参加条件
+    * ``CANCELED``   已取消 —— 终态，学生取消 / 撤销 / 退出
+
+    「待审核 / 正式 / 候补」合称**有效报名**：同一学生对同一活动最多一条
+    （BR-2）。「已拒绝 / 已取消」之后可以重新报名，但按**新的**时间重新排队
+    （DEC-3）。
+    """
+
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    WAITLISTED = "WAITLISTED"
+    REJECTED = "REJECTED"
     CANCELED = "CANCELED"
 
-    ALL = (ENROLLED, CANCELED)
+    ALL = (PENDING, CONFIRMED, WAITLISTED, REJECTED, CANCELED)
+
+    LABELS = {
+        PENDING: "待审核",
+        CONFIRMED: "正式",
+        WAITLISTED: "候补",
+        REJECTED: "已拒绝",
+        CANCELED: "已取消",
+    }
+
+    # 有效报名：处于其中任一状态即为「已报名」，不可重复报名
+    ACTIVE = (PENDING, CONFIRMED, WAITLISTED)
+
+    # 占用活动正式名额的状态（BR-1 约束的对象）
+    OCCUPYING = (CONFIRMED,)
 
 
 class AuditAction:
-    """审核日志的动作类型。"""
+    """活动流转日志的动作类型。
 
-    SUBMIT = "SUBMIT"
-    APPROVE = "APPROVE"
-    REJECT = "REJECT"
+    V2.0 记录四类活动级事件：发布 / 下线 / 恢复 / 取消。
+    报名审核的结果记在 `enrollment.reviewed_at` 上，不进这张表。
+    """
+
+    PUBLISH = "PUBLISH"
+    OFFLINE = "OFFLINE"
+    RESTORE = "RESTORE"
     CANCEL = "CANCEL"
+
+    # V1.0 活动审核流留下的历史动作。库里可能还有这样的旧日志行，
+    # 保留常量只是为了把它们渲染成人能看懂的字，新代码不再产生。
+    LEGACY_SUBMIT = "SUBMIT"
+    LEGACY_APPROVE = "APPROVE"
+    LEGACY_REJECT = "REJECT"
+
+    LABELS = {
+        PUBLISH: "发布活动",
+        OFFLINE: "下线活动",
+        RESTORE: "恢复展示",
+        CANCEL: "取消活动",
+        LEGACY_SUBMIT: "提交审核（V1.0 遗留）",
+        LEGACY_APPROVE: "审核通过（V1.0 遗留）",
+        LEGACY_REJECT: "审核驳回（V1.0 遗留）",
+    }
 
 
 class ResetRequestStatus:
@@ -120,7 +195,7 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(100))
     phone = db.Column(db.String(20))
     role = db.Column(db.String(20), nullable=False, default=Role.STUDENT, index=True)
-    # 仅社团角色使用
+    # 所属组织 / 部门（教师账号用来显示「张老师 · 摄影协会」这样的归属）
     club_name = db.Column(db.String(100))
     # 1 正常 / 0 停用
     status = db.Column(db.SmallInteger, nullable=False, default=1)
@@ -201,8 +276,8 @@ class User(UserMixin, db.Model):
         return self.role == Role.ADMIN
 
     @property
-    def is_club(self):
-        return self.role == Role.CLUB
+    def is_teacher(self):
+        return self.role == Role.TEACHER
 
     @property
     def is_student(self):
@@ -258,17 +333,20 @@ class Activity(db.Model):
     start_time = db.Column(db.DateTime, nullable=False)
     end_time = db.Column(db.DateTime, nullable=False)
     location = db.Column(db.String(150))
-    # 人数上限
+    # 人数上限：活动最多可接待的**正式参加**人数（T-03）
     capacity = db.Column(db.Integer, nullable=False)
-    # 冗余计数：它不是缓存，而是并发控制的载体。详见设计方案第 6.1 节
+    # 冗余计数：它不是缓存，而是并发控制的载体。详见设计方案第 6.1 节。
+    # 口径 = 状态为「正式」的报名数；候选（候补）不计入。
     enrolled_count = db.Column(db.Integer, nullable=False, default=0)
     enroll_deadline = db.Column(db.DateTime, nullable=False)
+    # 是否需要组织教师逐人审核报名（T-13、T-14）。
+    # 关掉时：有余位直接「正式」，满员直接进「候补」。
+    requires_review = db.Column(db.Boolean, nullable=False, default=False)
+    # 参加资格说明。需审核的活动应当填写，供学生在报名前了解条件（T-13）。
+    qualification = db.Column(db.String(255))
     status = db.Column(
         db.String(20), nullable=False, default=ActivityStatus.DRAFT, index=True
     )
-    reject_reason = db.Column(db.String(255))
-    approved_by = db.Column(db.Integer, db.ForeignKey("user.id"))
-    approved_at = db.Column(db.DateTime)
     # 开启签到时生成的 6 位签到码
     check_in_code = db.Column(db.String(6))
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
@@ -278,7 +356,6 @@ class Activity(db.Model):
     organizer = db.relationship(
         "User", foreign_keys=[organizer_id], back_populates="organized_activities"
     )
-    approver = db.relationship("User", foreign_keys=[approved_by])
     enrollments = db.relationship(
         "Enrollment",
         foreign_keys="Enrollment.activity_id",
@@ -312,10 +389,16 @@ class Activity(db.Model):
 
 
 class Enrollment(db.Model):
-    """报名记录。
+    """报名记录。V2.0 的五态见 `EnrollStatus`。
 
-    签到信息直接挂在这张表上，不单独建 attendance 表——MVP 不支持
-    「未报名直接签到」，两者是一对一关系，合表更简单。
+    一条记录的生命周期可能是「不止一次报名」的：取消 / 被拒之后重新报名时
+    **复用同一条记录**（唯一索引 `uk_activity_user` 决定了同一个人对同一个
+    活动只能有一条），只是把状态和新一轮的时间戳覆盖上去。
+
+    候补队列的排序**只看 `waitlisted_at`**（BR-4）——不存"排位"字段，
+    排位是查询时按时间算出来的。这样"候补者退出后，其后人员自动前移"
+    （BR-7）是天然成立的：少了一个人，后面每个人的排位自然就前进了，
+    不需要（也没有入口）去改任何人的顺序。
     """
 
     __tablename__ = "enrollment"
@@ -326,12 +409,18 @@ class Enrollment(db.Model):
     )
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     status = db.Column(
-        db.String(20), nullable=False, default=EnrollStatus.ENROLLED
+        db.String(20), nullable=False, default=EnrollStatus.CONFIRMED
     )
+    # 报名（提交申请）的时刻。重新报名时更新为新一轮的时间。
     enrolled_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    # 进入候补队列的时刻。**候补排序的唯一依据**，只在状态变为候补时写入。
+    waitlisted_at = db.Column(db.DateTime)
+    # 教师审核的时刻与操作人（仅"需审核的活动"会填写）
+    reviewed_at = db.Column(db.DateTime)
+    reviewed_by = db.Column(db.Integer, db.ForeignKey("user.id"))
     canceled_at = db.Column(db.DateTime)
     check_in_at = db.Column(db.DateTime)
-    # 手动核验签到的人（组织者或管理员）
+    # 手动核验签到的人（组织者）
     check_in_by = db.Column(db.Integer, db.ForeignKey("user.id"))
 
     activity = db.relationship(
@@ -341,6 +430,7 @@ class Enrollment(db.Model):
         "User", foreign_keys=[user_id], back_populates="enrollments"
     )
     check_in_operator = db.relationship("User", foreign_keys=[check_in_by])
+    reviewer = db.relationship("User", foreign_keys=[reviewed_by])
 
     __table_args__ = (
         # 唯一索引：同一个人对同一个活动只能有一条报名记录。
@@ -348,6 +438,15 @@ class Enrollment(db.Model):
         db.UniqueConstraint("activity_id", "user_id", name="uk_activity_user"),
         db.Index("idx_activity_status", "activity_id", "status"),
     )
+
+    @property
+    def status_label(self):
+        return EnrollStatus.LABELS.get(self.status, self.status)
+
+    @property
+    def is_active(self):
+        """是否为「有效报名」（待审核 / 正式 / 候补）。"""
+        return self.status in EnrollStatus.ACTIVE
 
     @property
     def has_checked_in(self):
@@ -358,7 +457,12 @@ class Enrollment(db.Model):
 
 
 class AuditLog(db.Model):
-    """活动审核日志。只追加，不修改。"""
+    """活动流转日志。只追加，不修改。
+
+    V2.0 记录：发布 / 管理员下线（含原因）/ 恢复 / 取消。
+    「谁在什么时候把哪场活动下线了、为什么」是 TC-14 要求教师端能看到的
+    「处理标记」的数据来源。
+    """
 
     __tablename__ = "audit_log"
 
