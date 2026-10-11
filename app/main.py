@@ -4,6 +4,7 @@ from flask import Blueprint, render_template
 from flask_login import current_user, login_required
 
 from .extensions import db
+from .mailbox import get_announcement
 from .models import (
     Activity,
     ActivityStatus,
@@ -51,6 +52,8 @@ def index():
         upcoming=upcoming,
         published_count=published_count,
         now=now,
+        # 标题下的说明文字现在是「公告」——存在数据库里，教师 / 管理员可改
+        announcement=get_announcement(),
     )
 
 

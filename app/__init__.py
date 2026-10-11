@@ -90,12 +90,13 @@ def create_app(config_name=None, **overrides):
         target = request.path if request.method == "GET" else None
         return redirect(url_for("auth.login", next=target))
 
-    from . import activities, admin, auth, main, services
+    from . import activities, admin, auth, mailbox, main, services
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(activities.bp)
     app.register_blueprint(admin.bp)
+    app.register_blueprint(mailbox.bp)
 
     # ---- 全局请求钩子 ----
 
@@ -202,7 +203,12 @@ def create_app(config_name=None, **overrides):
     @app.context_processor
     def inject_globals():
         """注入所有模板都能用的变量。"""
-        return {"current_user": current_user}
+        # 导航栏右上角的邮件未读角标。每个请求一次 COUNT，对这套规模可以忽略；
+        # 没登录时（current_user 是匿名）直接跳过，连查询都不发。
+        unread = 0
+        if current_user.is_authenticated:
+            unread = mailbox.unread_count(current_user.id)
+        return {"current_user": current_user, "unread_mail_count": unread}
 
     # ---- 模板过滤器 ----
 
@@ -300,8 +306,8 @@ def create_app(config_name=None, **overrides):
     def create_user(student_no, name, password, role):
         """创建一个账号，用于在本地验证登录与权限流程。
 
-        系统没有自助注册入口，账号一律由管理员创建——校园场景下这是对的，
-        开放注册等于任何人都能给自己开一个号。
+        学生可以自助注册（/auth/register）；教师 / 管理员账号没有自助入口，
+        只能由管理员在这里或后台创建——角色永远不由客户端决定。
         """
         exists = db.session.execute(
             db.select(models.User).where(models.User.student_no == student_no)

@@ -482,6 +482,85 @@ class AuditLog(db.Model):
         return f"<AuditLog a={self.activity_id} {self.action}>"
 
 
+class Message(db.Model):
+    """站内邮件（一封信）。
+
+    V2.0 新增的「邮件功能」：**只有活动组织教师与系统管理员可以发送**，
+    面向其他用户（全体 / 全体学生 / 全体教师 / 指定用户）。
+    学生只能收信——这个限制在服务端强制执行，前端藏按钮不算数。
+
+    收件人在 `MessageRecipient` 里逐人展开：发信时按范围解析成一条条
+    收件记录，每个人各自持有"已读 / 未读"，互不影响。
+    """
+
+    __tablename__ = "message"
+
+    id = db.Column(db.Integer, primary_key=True)
+    # 发件人。理论上有值；置空仅用于将来"系统通知"的场景。
+    sender_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    subject = db.Column(db.String(100), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    sender = db.relationship("User", foreign_keys=[sender_id])
+    recipients = db.relationship(
+        "MessageRecipient",
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self):
+        return f"<Message {self.id} {self.subject!r}>"
+
+
+class MessageRecipient(db.Model):
+    """一封信与一位收件人的对应关系（含已读时间）。"""
+
+    __tablename__ = "message_recipient"
+
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(
+        db.Integer, db.ForeignKey("message.id"), nullable=False
+    )
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    # NULL = 未读。置上时间即为"读过"的时刻。
+    read_at = db.Column(db.DateTime)
+
+    message = db.relationship("Message", back_populates="recipients")
+    user = db.relationship("User", foreign_keys=[user_id])
+
+    __table_args__ = (
+        # 同一个人对同一封信只能有一条收件记录
+        db.UniqueConstraint("message_id", "user_id", name="uk_message_user"),
+        # 未读计数走这个索引：where user_id = ? and read_at is null
+        db.Index("idx_recipient_user_read", "user_id", "read_at"),
+    )
+
+    def __repr__(self):
+        return f"<MessageRecipient m={self.message_id} u={self.user_id}>"
+
+
+class Announcement(db.Model):
+    """首页公告（单行表：永远只有 id=1 这一行）。
+
+    这段文字原来硬编码在首页模板里，现在搬进数据库：教师 / 管理员
+    可以在「邮件」页面直接改，改完首页与邮件页同时生效。
+    空库或旧库第一次打开首页时，会按默认文案自动建出这一行。
+    """
+
+    __tablename__ = "announcement"
+
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.Text, nullable=False)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    updated_at = db.Column(db.DateTime)
+
+    editor = db.relationship("User", foreign_keys=[updated_by])
+
+    def __repr__(self):
+        return f"<Announcement {len(self.content or '')} chars>"
+
+
 class PasswordResetRequest(db.Model):
     """忘记密码的找回申请。
 

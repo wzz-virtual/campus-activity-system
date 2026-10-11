@@ -10,6 +10,7 @@
 """
 
 from .extensions import db
+from .mailbox import get_announcement
 from .migrations import schema_needs_upgrade, upgrade_to_v2
 from .models import User
 from .seed import DEMO_ACCOUNTS, DEMO_PASSWORD, seed_demo_data
@@ -36,6 +37,10 @@ def prepare_database(app):
             notes = upgrade_to_v2()
             for note in notes:
                 app.logger.info("V2.0 迁移：%s", note)
+
+        # V2.0 的公告行：老库加完新表是空的，首页会没有说明文字。
+        # get_announcement() 会在缺失时按默认文案补一条（幂等）。
+        get_announcement()
 
         if not database_is_empty():
             return None

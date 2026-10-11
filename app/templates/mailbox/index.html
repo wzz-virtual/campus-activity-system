@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}邮件 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-1">邮件</h1>
+    <p class="text-secondary small mb-0">
+      <strong>活动组织教师与系统管理员</strong>可以给其他用户发信；学生只收信。
+    </p>
+  </div>
+  {% if can_send %}
+    <a class="btn btn-sm btn-primary" href="{{ url_for('mailbox.compose') }}">✍️ 写邮件</a>
+  {% endif %}
+</div>
+
+{# ---- 公告：首页也展示同一段文字，改这里两边一起生效 ---- #}
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+      <h2 class="h6 mb-0">📢 公告</h2>
+      {% if announcement.updated_at %}
+        <span class="small text-secondary">
+          最近更新：{{ announcement.updated_at|localtime('%Y-%m-%d %H:%M') }}
+          {%- if announcement.editor %} · {{ announcement.editor.name }}{% endif %}
+        </span>
+      {% else %}
+        <span class="small text-secondary">首页展示的说明文字，改这里两边一起生效</span>
+      {% endif %}
+    </div>
+    <div style="white-space: pre-wrap">{{ announcement.content }}</div>
+
+    {% if can_send %}
+      <details class="mt-3">
+        <summary class="small text-primary" style="cursor: pointer">编辑公告</summary>
+        <form method="post" action="{{ url_for('mailbox.edit_announcement') }}" class="mt-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <textarea class="form-control" name="content" rows="5"
+                    maxlength="2000">{{ announcement.content }}</textarea>
+          <div class="d-flex flex-wrap gap-2 mt-2 align-items-center">
+            <button class="btn btn-sm btn-primary" type="submit">保存公告</button>
+            <span class="small text-secondary">保存后「活动广场」首页同步更新</span>
+          </div>
+        </form>
+      </details>
+    {% endif %}
+  </div>
+</div>
+
+{# ---- 收件箱 ---- #}
+<div class="card mb-3">
+  <div class="card-body">
+    <h2 class="h6 mb-3">收件箱（{{ inbox|length }}）</h2>
+    {% if not inbox %}
+      <p class="text-secondary small mb-0">还没有收到任何邮件。</p>
+    {% else %}
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width:130px">发件人</th>
+              <th>主题</th>
+              <th style="width:160px">时间</th>
+              <th style="width:76px">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in inbox %}
+              <tr>
+                <td class="small">{{ row.sender.name if row.sender else '系统' }}</td>
+                <td>
+                  <a class="link-dark text-decoration-none fw-medium"
+                     href="{{ url_for('mailbox.detail', message_id=row.message.id) }}">
+                    {{ row.message.subject }}
+                  </a>
+                </td>
+                <td class="small text-secondary">{{ row.message.created_at|localtime('%Y-%m-%d %H:%M') }}</td>
+                <td>
+                  {% if row.record.read_at %}
+                    <span class="badge text-bg-light border">已读</span>
+                  {% else %}
+                    <span class="badge text-bg-danger">未读</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ---- 发件箱（仅教师 / 管理员） ---- #}
+{% if can_send %}
+  <div class="card">
+    <div class="card-body">
+      <h2 class="h6 mb-3">我发出的（{{ sent|length }}）</h2>
+      {% if not sent %}
+        <p class="text-secondary small mb-0">还没有发出过邮件。</p>
+      {% else %}
+        <div class="table-responsive-sm">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>主题</th>
+                <th style="width:110px">送达人数</th>
+                <th style="width:160px">时间</th>
+                <th style="width:80px" class="text-end">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in sent %}
+                <tr>
+                  <td class="fw-medium">{{ row.message.subject }}</td>
+                  <td class="small">{{ row.recipient_count }} 人</td>
+                  <td class="small text-secondary">{{ row.message.created_at|localtime('%Y-%m-%d %H:%M') }}</td>
+                  <td class="text-end">
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="{{ url_for('mailbox.detail', message_id=row.message.id) }}">查看</a>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

@@ -51,6 +51,15 @@
             </span>
           </li>
           <li class="nav-item">
+            {# 邮件入口固定在右上角；有未读时挂一个数量角标 #}
+            <a class="nav-link" href="{{ url_for('mailbox.index') }}">
+              ✉️ 邮件
+              {% if unread_mail_count %}
+                <span class="badge text-bg-danger">{{ unread_mail_count }}</span>
+              {% endif %}
+            </a>
+          </li>
+          <li class="nav-item">
             <a class="nav-link" href="{{ url_for('auth.change_password') }}">修改密码</a>
           </li>
           <li class="nav-item">
@@ -62,7 +71,9 @@
             </form>
           </li>
         {% else %}
-          <li class="nav-item">
+          {# 登录与注册并列放在右上角 #}
+          <li class="nav-item d-flex gap-2">
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('auth.register') }}">注册</a>
             <a class="btn btn-sm btn-primary" href="{{ url_for('auth.login') }}">登录</a>
           </li>
         {% endif %}

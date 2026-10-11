@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}写邮件 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-1">写邮件</h1>
+    <p class="text-secondary small mb-0">
+      仅活动组织教师与系统管理员可以发送。收件范围支持全体、按角色或指定一个人。
+    </p>
+  </div>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('mailbox.index') }}">← 返回邮件</a>
+</div>
+
+<form method="post" action="{{ url_for('mailbox.compose') }}"
+      class="card" style="max-width: 760px" novalidate>
+  <div class="card-body">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="row g-3">
+      <div class="col-md-5">
+        <label class="form-label" for="m-scope">收件范围</label>
+        <select class="form-select" id="m-scope" name="scope">
+          {% for value, label in scopes.items() %}
+            <option value="{{ value }}" {{ 'selected' if form.scope == value }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-7">
+        <label class="form-label" for="m-user">指定用户 <span class="text-secondary small">（仅“指定用户”范围时生效）</span></label>
+        <select class="form-select" id="m-user" name="user_id">
+          <option value="">— 选择一个人 —</option>
+          {% for person in users %}
+            <option value="{{ person.id }}"
+              {{ 'selected' if form.user_id == person.id }}>
+              {{ person.name }}（{{ person.student_no }} · {{ person.role_label }}）
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label" for="m-subject">主题 <span class="text-danger">*</span></label>
+        <input class="form-control" id="m-subject" name="subject" maxlength="100"
+               value="{{ form.subject }}" placeholder="例如：本周活动安排提醒">
+      </div>
+
+      <div class="col-12">
+        <label class="form-label" for="m-body">正文 <span class="text-danger">*</span></label>
+        <textarea class="form-control" id="m-body" name="body" rows="7"
+                  placeholder="纯文本，支持换行">{{ form.body }}</textarea>
+      </div>
+    </div>
+  </div>
+  <div class="card-footer d-flex gap-2 align-items-center">
+    <button class="btn btn-primary" type="submit">发送</button>
+    <span class="small text-secondary">发送后收件人会在右上角「邮件」里看到未读标记</span>
+  </div>
+</form>
+{% endblock %}

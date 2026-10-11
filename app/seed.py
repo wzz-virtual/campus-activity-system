@@ -27,6 +27,7 @@
 from datetime import timedelta
 
 from .extensions import db
+from .mailbox import DEFAULT_ANNOUNCEMENT, get_announcement
 from .models import (
     Activity,
     ActivityStatus,
@@ -35,6 +36,8 @@ from .models import (
     Category,
     Enrollment,
     EnrollStatus,
+    Message,
+    MessageRecipient,
     Role,
     User,
     utcnow,
@@ -459,10 +462,50 @@ def seed_demo_data():
         )
     )
 
+    # ⑬ 公告与站内邮件（V2.0 的「邮件」功能）
+    #    公告就是首页那段说明文字——存进数据库后，教师 / 管理员可以在
+    #    「邮件」页直接编辑，首页同步更新。这里把默认文案固化到库里。
+    announcement = get_announcement()
+    announcement.content = DEFAULT_ANNOUNCEMENT
+    announcement.updated_by = admin.id
+    announcement.updated_at = now
+
+    def send(subject, body, recipients, sender):
+        message = Message(sender_id=sender.id, subject=subject, body=body)
+        db.session.add(message)
+        db.session.flush()
+        for person in recipients:
+            db.session.add(
+                MessageRecipient(message_id=message.id, user_id=person.id)
+            )
+        return message
+
+    # 两封示例邮件：登录任意学生账号，右上角「邮件」就有未读角标可看
+    send(
+        "本周活动安排提醒",
+        "同学们好：\n"
+        "本周有三场活动开放报名——「手机摄影技巧分享会」「暗房冲洗体验（小班）」"
+        "与「人像摄影体验日」。\n"
+        "其中「人像摄影体验日」需要审核，请如实填写报名信息；满员的活动可以先加入"
+        "候补队列，有人退出时按先来后到自动递补。\n\n张老师",
+        all_students,
+        teacher,
+    )
+    send(
+        "平台使用提示",
+        "同学们好：\n"
+        "忘记密码时，可以在登录页点「忘记密码」提交找回申请（管理员核实身份后重置）；"
+        "报名、候补与审核的进度，都可以在「我的报名」里查看。\n"
+        "如遇账号异常请直接联系系统管理员。\n\n陈老师",
+        all_students,
+        admin,
+    )
+
     db.session.commit()
 
     return {
         "categories": len(CATEGORIES),
         "users": len(DEMO_ACCOUNTS) + len(EXTRA_STUDENTS),
         "activities": ACTIVITY_COUNT,
+        "messages": 2,
     }
