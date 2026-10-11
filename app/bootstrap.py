@@ -10,7 +10,7 @@
 """
 
 from .extensions import db
-from .mailbox import get_announcement
+from .mailbox import get_announcement, normalize_legacy_announcement
 from .migrations import schema_needs_upgrade, upgrade_to_v2
 from .models import User
 from .seed import DEMO_ACCOUNTS, DEMO_PASSWORD, seed_demo_data
@@ -38,9 +38,11 @@ def prepare_database(app):
             for note in notes:
                 app.logger.info("V2.0 迁移：%s", note)
 
-        # V2.0 的公告行：老库加完新表是空的，首页会没有说明文字。
-        # get_announcement() 会在缺失时按默认文案补一条（幂等）。
+        # V2.0 的公告行：老库加完新表是空的，补一条（幂等）。
+        # 公告默认不再预置文案（用户要求删掉首页说明文字）：
+        # 仍存着旧默认文案的行在这里一并清空，教师自己写的不受影响。
         get_announcement()
+        normalize_legacy_announcement()
 
         if not database_is_empty():
             return None

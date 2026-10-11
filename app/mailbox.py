@@ -2,9 +2,8 @@
 
 两件事放在同一个入口（导航栏右上角的「邮件」）：
 
-1. **公告**——首页那段"把校园活动从…搬到线上"的说明文字，原来硬编码在模板里，
-   现在存进数据库（`Announcement` 单行表）。教师 / 管理员可以直接改，
-   改完首页与邮件页同时生效；
+1. **公告**——首页标题下的说明文字，存进数据库（`Announcement` 单行表）。
+   **默认为空（不显示）**，教师 / 管理员想写就写，改完首页与邮件页同时生效；
 2. **邮件**——**只有活动组织教师与系统管理员可以发送**，收件人按范围解析
    （全体用户 / 全体学生 / 全体教师 / 指定用户），学生在收件箱里读信。
    权限在服务端强制执行：学生连写邮件页都拿不到（403），前端藏按钮不算数。
@@ -37,8 +36,14 @@ from .permissions import role_required
 
 bp = Blueprint("mailbox", __name__, url_prefix="/mail")
 
-# 公告的默认文案（首页说明文字）。空库 / 旧库第一次打开时按它建出公告行。
-DEFAULT_ANNOUNCEMENT = (
+# 公告默认**不再预置文案**（2026-10-11 用户要求删掉首页那段说明文字）：
+# 公告由教师 / 管理员自己写，没写就是空，首页不渲染。
+DEFAULT_ANNOUNCEMENT = ""
+
+# 之前的默认文案。老库（本地与线上）里可能还存着它——启动时用
+# normalize_legacy_announcement() 把「没人改过、仍是这段」的公告清空（幂等）；
+# 教师 / 管理员自己写过的内容不受影响。
+LEGACY_DEFAULT_ANNOUNCEMENT = (
     "把校园活动从「群通知 + 在线表格」搬到线上，跑通一条可追溯的闭环：\n"
     "组织教师发布 → 学生报名 / 候补 → 教师审核 → 现场签到 → 统计复盘\n"
     "\n"
@@ -64,11 +69,7 @@ ANNOUNCEMENT_MAX_LENGTH = 2000
 
 
 def get_announcement():
-    """取公告（单行表）。
-
-    没有就地补一条默认文案——旧库（比如线上沙箱里那份）加新表之后是空的，
-    首页会没有说明文字，看起来像坏了。补默认值让升级"无感"。
-    """
+    """取公告（单行表）。没有就建一条**空白**公告（幂等，容忍并发插入）。"""
     row = db.session.get(Announcement, 1)
     if row is not None:
         return row
@@ -84,11 +85,29 @@ def get_announcement():
     return row
 
 
+def normalize_legacy_announcement():
+    """把「仍是旧默认文案」的公告行清空（幂等，启动时调用一次）。
+
+    只清理**没人编辑过**的行（内容恰好等于旧默认文案）；教师 / 管理员
+    自己写过的公告一字不动。清空时把修改人 / 时间一并复位，
+    避免出现「最近更新：xxx」但内容空白的怪相。
+    """
+    row = db.session.get(Announcement, 1)
+    if row is None or row.content != LEGACY_DEFAULT_ANNOUNCEMENT:
+        return False
+    row.content = ""
+    row.updated_by = None
+    row.updated_at = None
+    db.session.commit()
+    return True
+
+
 def update_announcement(content, operator_id):
-    """更新公告文字。返回 ``(是否成功, 错误说明)``。"""
+    """更新公告文字。允许传空——空串 = 清空公告（首页不再显示）。
+
+    返回 ``(是否成功, 错误说明)``。
+    """
     content = (content or "").strip()
-    if not content:
-        return False, "公告内容不能为空"
     if len(content) > ANNOUNCEMENT_MAX_LENGTH:
         return False, f"公告内容不能超过 {ANNOUNCEMENT_MAX_LENGTH} 字"
 

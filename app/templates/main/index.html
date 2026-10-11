@@ -5,10 +5,11 @@
 <div class="p-4 mb-4 bg-white rounded-3 border">
   <h1 class="h4 mb-2">校园活动管理系统 <span class="fs-6 text-secondary align-middle">V2.0</span></h1>
 
-  {# 标题下的说明文字 = 公告（存在数据库里）。
-     教师 / 管理员可以在右上角「邮件」页面直接改，这里同步更新；
-     空库第一次访问时会自动按默认文案建出这一行。 #}
-  <p class="text-secondary mb-3" style="white-space: pre-wrap">{{ announcement.content }}</p>
+  {# 标题下的说明文字 = 公告（存在数据库里，默认为空、不渲染）。
+     教师 / 管理员可以在右上角「邮件」页面写 / 改，这里同步更新。 #}
+  {% if announcement.content %}
+    <p class="text-secondary mb-3" style="white-space: pre-wrap">{{ announcement.content }}</p>
+  {% endif %}
 
   <div class="d-flex flex-wrap gap-2 mt-3">
     <a class="btn btn-sm btn-primary" href="{{ url_for('activities.list_activities') }}">进入活动广场</a>

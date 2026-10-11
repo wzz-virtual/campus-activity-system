@@ -27,7 +27,7 @@
 from datetime import timedelta
 
 from .extensions import db
-from .mailbox import DEFAULT_ANNOUNCEMENT, get_announcement
+from .mailbox import get_announcement
 from .models import (
     Activity,
     ActivityStatus,
@@ -463,12 +463,9 @@ def seed_demo_data():
     )
 
     # ⑬ 公告与站内邮件（V2.0 的「邮件」功能）
-    #    公告就是首页那段说明文字——存进数据库后，教师 / 管理员可以在
-    #    「邮件」页直接编辑，首页同步更新。这里把默认文案固化到库里。
-    announcement = get_announcement()
-    announcement.content = DEFAULT_ANNOUNCEMENT
-    announcement.updated_by = admin.id
-    announcement.updated_at = now
+    #    公告默认**不预置文案**（用户要求首页不放说明文字）：
+    #    这里只保证公告行存在，内容由教师 / 管理员以后在「邮件」页自己写。
+    get_announcement()
 
     def send(subject, body, recipients, sender):
         message = Message(sender_id=sender.id, subject=subject, body=body)
