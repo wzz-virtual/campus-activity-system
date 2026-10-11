@@ -20,11 +20,14 @@ from app.extensions import db as _db
 from app.models import (
     Activity,
     ActivityStatus,
+    Announcement,
     AuditAction,
     AuditLog,
     Category,
     EnrollStatus,
     Enrollment,
+    Message,
+    MessageRecipient,
     Role,
     User,
     utcnow,
@@ -359,3 +362,43 @@ def test_seeded_offline_marker_is_visible_on_pages(app, client, login):
     login("club001", password=DEMO_PASSWORD)
     mine = client.get("/my/activities").get_data(as_text=True)
     assert "已被管理员下线" in mine
+
+
+def test_seed_creates_announcement_and_demo_mails(app, client, login):
+    """V2.0 的演示数据要带上公告与两封示例邮件。"""
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    with app.app_context():
+        announcement = _db.session.get(Announcement, 1)
+        assert announcement is not None, "公告行缺失，首页会没有说明文字"
+        assert "把校园活动从" in announcement.content
+        assert announcement.updated_by is not None
+
+        messages = _db.session.execute(_db.select(Message)).scalars().all()
+        assert len(messages) == 2, "应当预置两封示例邮件"
+
+        # 每个学生都收到两封未读
+        someone = _db.session.execute(
+            _db.select(User).where(User.student_no == "20230101")
+        ).scalar_one()
+        unread = (
+            _db.session.execute(
+                _db.select(_db.func.count())
+                .select_from(MessageRecipient)
+                .where(
+                    MessageRecipient.user_id == someone.id,
+                    MessageRecipient.read_at.is_(None),
+                )
+            ).scalar_one()
+        )
+        assert unread == 2
+
+    # 登录学生账号：右上角邮件入口带未读角标
+    login("20230101", password=DEMO_PASSWORD)
+    dashboard = client.get("/dashboard").get_data(as_text=True)
+    assert "邮件" in dashboard
+    assert '<span class="badge text-bg-danger">2</span>' in dashboard
+
+    mail_page = client.get("/mail/").get_data(as_text=True)
+    assert "本周活动安排提醒" in mail_page
+    assert "平台使用提示" in mail_page
