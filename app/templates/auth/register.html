@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}注册 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5 col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h1 class="h5 mb-1">注册</h1>
+        <p class="text-secondary small mb-4">
+          自助注册只创建<b>学生</b>账号；教师 / 管理员账号由系统管理员创建。
+        </p>
+
+        <form method="post" novalidate>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+          <div class="mb-3">
+            <label for="student_no" class="form-label">学号 / 工号</label>
+            <input type="text" class="form-control" id="student_no" name="student_no"
+                   maxlength="20" autocomplete="username" required autofocus
+                   value="{{ form.student_no }}">
+            <div class="form-text">同一个学号 / 工号只能注册一个账号</div>
+          </div>
+
+          <div class="mb-3">
+            <label for="name" class="form-label">姓名</label>
+            <input type="text" class="form-control" id="name" name="name"
+                   maxlength="50" autocomplete="name" required value="{{ form.name }}">
+          </div>
+
+          <div class="mb-3">
+            <label for="password" class="form-label">密码</label>
+            <input type="password" class="form-control" id="password" name="password"
+                   autocomplete="new-password" required>
+            <div class="form-text">至少 {{ min_password_length }} 位。密码以首次注册时输入的为准，请记牢。</div>
+          </div>
+
+          <div class="mb-4">
+            <label for="confirm_password" class="form-label">确认密码</label>
+            <input type="password" class="form-control" id="confirm_password"
+                   name="confirm_password" autocomplete="new-password" required>
+          </div>
+
+          {# 注册与登录并列：已有账号的同学直接切回去 #}
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary flex-fill">注册</button>
+            <a class="btn btn-outline-secondary flex-fill"
+               href="{{ url_for('auth.login') }}">返回登录</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

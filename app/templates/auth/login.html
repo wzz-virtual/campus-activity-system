@@ -28,7 +28,12 @@
                    autocomplete="current-password" required>
           </div>
 
-          <button type="submit" class="btn btn-primary w-100">登录</button>
+          {# 登录与注册并列：还没有账号的同学不用先去问别人 #}
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary flex-fill">登录</button>
+            <a class="btn btn-outline-secondary flex-fill"
+               href="{{ url_for('auth.register') }}">注册</a>
+          </div>
         </form>
 
         <div class="mt-3 text-center">

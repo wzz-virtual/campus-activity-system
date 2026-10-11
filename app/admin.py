@@ -283,7 +283,7 @@ def delete_category(category_id):
 @bp.get("/users")
 @role_required(Role.ADMIN)
 def users():
-    """用户列表。系统不提供自助注册，账号一律由管理员在这里创建。"""
+    """用户列表。学生可自助注册；教师 / 管理员账号由管理员在这里创建。"""
     keyword = (request.args.get("keyword") or "").strip()
 
     condition = db.select(User)

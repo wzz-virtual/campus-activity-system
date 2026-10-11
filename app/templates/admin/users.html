@@ -5,8 +5,8 @@
 {% block content %}
 <h1 class="h4 mb-1">用户管理</h1>
 <p class="text-secondary small mb-4">
-  系统<b>不提供自助注册</b>：校园场景下开放注册等于任何人都能给自己开一个号。
-  账号一律在管理员这里创建后发放。
+  学生可用学号 / 工号<b>自助注册</b>（登录页右上角「注册」）；教师 / 管理员账号
+  由管理员在这里创建。已注册的账号可停用 / 恢复、调整角色。
 </p>
 
 <form class="card mb-3" method="get" action="{{ url_for('admin.users') }}">

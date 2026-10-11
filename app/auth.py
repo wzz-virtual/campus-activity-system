@@ -18,11 +18,12 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .config import LOGIN_LOCK_DURATION, LOGIN_MAX_ATTEMPTS, MIN_PASSWORD_LENGTH
 from .extensions import db
-from .models import PasswordResetRequest, ResetRequestStatus, User
+from .models import PasswordResetRequest, ResetRequestStatus, Role, User
 
 bp = Blueprint("auth", __name__, url_prefix="/auth")
 
@@ -137,6 +138,84 @@ def login():
         return redirect(_safe_next("main.dashboard"))
 
     return render_template("auth/login.html")
+
+
+@bp.route("/register", methods=["GET", "POST"])
+def register():
+    """学生自助注册。
+
+    规则（按需求明确）：
+
+    * **同一个学号 / 工号只能注册一个账号**——重复注册会被拒绝，
+      而且**绝不会覆盖已有账号的密码**（密码以首次注册时输入的为准）；
+    * 角色**写死为学生**：教师 / 管理员账号只能由管理员在后台创建。
+      请求体里塞 role=ADMIN 不会有任何效果——角色的唯一来源是服务端。
+    """
+    if current_user.is_authenticated:
+        return redirect(url_for("main.dashboard"))
+
+    if request.method == "POST":
+        student_no = (request.form.get("student_no") or "").strip()
+        name = (request.form.get("name") or "").strip()
+        password = request.form.get("password") or ""
+        confirm = request.form.get("confirm_password") or ""
+
+        error = None
+        if not student_no or len(student_no) > 20:
+            error = "学号 / 工号不能为空，且不超过 20 个字"
+        elif not name or len(name) > 50:
+            error = "姓名不能为空，且不超过 50 个字"
+        elif len(password) < MIN_PASSWORD_LENGTH:
+            error = f"密码长度不能少于 {MIN_PASSWORD_LENGTH} 个字符"
+        elif password != confirm:
+            error = "两次输入的密码不一致"
+        elif _find_user(student_no) is not None:
+            # 学号已被注册过：拒绝，并且**不动**已有账号的任何东西
+            error = "这个学号 / 工号已经注册过了。如果是你本人，请直接登录；忘记密码可以走「找回密码」。"
+
+        if error:
+            flash(error, "danger")
+            return (
+                render_template(
+                    "auth/register.html",
+                    form={"student_no": student_no, "name": name},
+                    min_password_length=MIN_PASSWORD_LENGTH,
+                ),
+                400,
+            )
+
+        user = User(student_no=student_no, name=name, role=Role.STUDENT)
+        user.set_password(password)
+        db.session.add(user)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # 并发兜底：两个人同时用同一个学号注册，唯一索引会拦下后来的那个
+            db.session.rollback()
+            flash("这个学号 / 工号刚刚被注册过了，请直接登录。", "warning")
+            return (
+                render_template(
+                    "auth/register.html",
+                    form={"student_no": student_no, "name": name},
+                    min_password_length=MIN_PASSWORD_LENGTH,
+                ),
+                409,
+            )
+
+        # 注册成功直接进入登录态；会话防护与登录保持一致：
+        # 先清 session（防会话固定），再标记永久会话（让 8 小时有效期生效）。
+        session.clear()
+        session.permanent = True
+        login_user(user)
+
+        flash(f"注册成功，欢迎你，{user.name}", "success")
+        return redirect(url_for("main.dashboard"))
+
+    return render_template(
+        "auth/register.html",
+        form={"student_no": "", "name": ""},
+        min_password_length=MIN_PASSWORD_LENGTH,
+    )
 
 
 @bp.post("/logout")
