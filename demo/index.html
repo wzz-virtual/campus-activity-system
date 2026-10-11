@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>校园活动管理系统 · 交互 Demo</title>
+<title>校园活动管理系统 V2.0 · 交互 Demo</title>
 <style>
   * { box-sizing: border-box; }
   :root {
@@ -53,6 +53,8 @@
   .btn:hover { background: #f9fafb; border-color: #b9c0cb; }
   .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
   .btn.primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+  .btn.warn { background: #fff; border-color: #fdb022; color: var(--warn); }
+  .btn.warn:hover { background: var(--warn-soft); }
   .btn.danger { background: #fff; border-color: #fda29b; color: var(--danger); }
   .btn.danger:hover { background: var(--danger-soft); }
   .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
@@ -72,8 +74,10 @@
   .st-ongoing   { background: var(--ok-soft); color: var(--ok); }
   .st-finished  { background: #eef2f6; color: #475467; }
   .st-canceled  { background: #f2f4f7; color: var(--faint); }
+  .st-offline   { background: var(--danger-soft); color: var(--danger); }
+  .st-waitlist  { background: var(--warn-soft); color: var(--warn); }
   .role-STUDENT { background: #eef2f6; color: #475467; }
-  .role-CLUB    { background: var(--purple-soft); color: var(--purple); }
+  .role-TEACHER { background: var(--purple-soft); color: var(--purple); }
   .role-ADMIN   { background: var(--primary-soft); color: var(--primary-dark); }
 
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
@@ -85,6 +89,8 @@
   .row { display: flex; align-items: center; gap: 8px; }
   .spacer { flex: 1; }
   .divider { height: 1px; background: var(--border); margin: 16px 0; }
+  .ok-mark { color: var(--ok); font-weight: 600; }
+  .full-mark { color: var(--warn); font-weight: 600; }
 
   /* ---------- 登录页 ---------- */
   .login-wrap {
@@ -224,10 +230,12 @@
     padding: 8px 11px; border-radius: 8px; border: 1px solid var(--border-strong);
     background: #fff; outline: none; width: 100%;
   }
-  .field textarea { min-height: 96px; resize: vertical; line-height: 1.6; }
+  .field textarea { min-height: 86px; resize: vertical; line-height: 1.6; }
   .field input:focus, .field select:focus, .field textarea:focus {
     border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.12);
   }
+  .check-field { display: flex; align-items: flex-start; gap: 9px; }
+  .check-field input { margin-top: 3px; }
   .hint { font-size: 12px; color: var(--faint); }
   .err-box {
     background: var(--danger-soft); border: 1px solid #fda29b; color: var(--danger);
@@ -266,6 +274,7 @@
     padding: 12px 15px; border-radius: 0 8px 8px 0; font-size: 13px; color: #1e3a8a;
   }
   .callout.warn { border-color: #f79009; background: var(--warn-soft); color: #7a2e0e; }
+  .callout.danger { border-color: #fda29b; background: var(--danger-soft); color: #912018; }
 
   .code-chip {
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -329,26 +338,56 @@
   }
   function nl2br(s) { return esc(s).replace(/\n/g, '<br>'); }
 
+  /* ---------- 两套状态词表（V2.0） ---------- */
+
+  // 活动：六态。V2.0 去掉了活动审核流（没有「待审核 / 已驳回」），
+  // 管理员对违规活动的处理改为「下线 / 恢复」。
   const STATUS = {
     DRAFT:     { label: '草稿',   cls: 'st-draft' },
-    PENDING:   { label: '待审核', cls: 'st-pending' },
-    REJECTED:  { label: '已驳回', cls: 'st-rejected' },
     PUBLISHED: { label: '已发布', cls: 'st-published' },
     ONGOING:   { label: '进行中', cls: 'st-ongoing' },
     FINISHED:  { label: '已结束', cls: 'st-finished' },
+    OFFLINE:   { label: '已下线', cls: 'st-offline' },
     CANCELED:  { label: '已取消', cls: 'st-canceled' }
   };
-  const ROLE_LABEL = { STUDENT: '学生', CLUB: '社团', ADMIN: '校级管理员' };
+  // 报名：五态。V2.0 的核心——满员不再是"报不上"，而是进候补队列。
+  const ENROLL = {
+    PENDING:    { label: '待审核', cls: 'st-pending' },
+    CONFIRMED:  { label: '正式',   cls: 'st-ongoing' },
+    WAITLISTED: { label: '候补',   cls: 'st-waitlist' },
+    REJECTED:   { label: '已拒绝', cls: 'st-rejected' },
+    CANCELED:   { label: '已取消', cls: 'st-canceled' }
+  };
+  const ROLE_LABEL = { STUDENT: '学生', TEACHER: '活动组织教师', ADMIN: '系统管理员' };
+
   const VISIBLE_TO_STUDENT = ['PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'];
+  const ADMIN_OFFINABLE = ['PUBLISHED', 'ONGOING', 'FINISHED'];
+  const ACTIVE_ENROLL = ['PENDING', 'CONFIRMED', 'WAITLISTED'];
 
   function badge(st) {
     const m = STATUS[st] || { label: st, cls: 'st-draft' };
     return '<span class="badge ' + m.cls + '">' + m.label + '</span>';
   }
+  function enrollBadge(st, extra) {
+    const m = ENROLL[st] || { label: st, cls: 'st-draft' };
+    return '<span class="badge ' + m.cls + '">' + m.label + (extra || '') + '</span>';
+  }
   function roleBadge(r) {
     return '<span class="badge role-' + r + '">' + ROLE_LABEL[r] + '</span>';
   }
   function toneOf(id) { return ['blue', 'purple', 'green', 'orange', 'pink', 'teal'][id % 6]; }
+
+  /* 取消报名策略：距报名截止不足这个小时数起，名单锁定，不可再取消。
+     ⚠️ 只作用于「正式」报名；「候补退出」「待审核撤销」随时可用。 */
+  const CANCEL_LOCK_HOURS = 24;
+
+  /** 按时间推导活动应当处于的状态（恢复下线时用）。 */
+  function statusByTime(a) {
+    const now = Date.now();
+    if (now < new Date(a.startTime).getTime()) return 'PUBLISHED';
+    if (now < new Date(a.endTime).getTime()) return 'ONGOING';
+    return 'FINISHED';
+  }
 
   /* =========================================================
      2. 模拟数据
@@ -358,32 +397,35 @@
     { id: 2, name: '体育竞技' },
     { id: 3, name: '学术讲座' },
     { id: 4, name: '志愿服务' },
-    { id: 5, name: '社团招新' }
+    { id: 5, name: '社团活动' }
   ];
 
   const ALL_USERS = [
-    { id: 1,  studentNo: '20230101', name: '李明',   role: 'STUDENT', email: '20230101@campus.edu.cn', status: 1 },
-    { id: 2,  studentNo: '20230102', name: '王芳',   role: 'STUDENT', email: '20230102@campus.edu.cn', status: 1 },
-    { id: 3,  studentNo: '20230103', name: '张伟',   role: 'STUDENT', email: '20230103@campus.edu.cn', status: 1 },
-    { id: 4,  studentNo: '20230104', name: '刘洋',   role: 'STUDENT', email: '20230104@campus.edu.cn', status: 1 },
-    { id: 5,  studentNo: '20230105', name: '陈静',   role: 'STUDENT', email: '20230105@campus.edu.cn', status: 0 },
-    { id: 10, studentNo: 'club001',  name: '摄影协会', role: 'CLUB',  email: 'photo@campus.edu.cn',  clubName: '摄影协会', status: 1 },
-    { id: 11, studentNo: 'club002',  name: '篮球社',   role: 'CLUB',  email: 'basket@campus.edu.cn', clubName: '篮球社',   status: 1 },
-    { id: 12, studentNo: 'club003',  name: '动漫社',   role: 'CLUB',  email: 'acg@campus.edu.cn',    clubName: '动漫社',   status: 1 },
-    { id: 99, studentNo: 'admin',    name: '陈老师',   role: 'ADMIN', email: 'admin@campus.edu.cn',  status: 1 }
+    { id: 1,  studentNo: '20230101', name: '李明', role: 'STUDENT', email: '20230101@campus.edu.cn', status: 1 },
+    { id: 2,  studentNo: '20230102', name: '王芳', role: 'STUDENT', email: '20230102@campus.edu.cn', status: 1 },
+    { id: 3,  studentNo: '20230103', name: '赵启', role: 'STUDENT', email: '20230103@campus.edu.cn', status: 1 },
+    { id: 4,  studentNo: '20230104', name: '孙悦', role: 'STUDENT', email: '20230104@campus.edu.cn', status: 1 },
+    { id: 5,  studentNo: '20230105', name: '周航', role: 'STUDENT', email: '20230105@campus.edu.cn', status: 0 },
+    { id: 6,  studentNo: '20230106', name: '吴桐', role: 'STUDENT', email: '20230106@campus.edu.cn', status: 1 },
+    { id: 7,  studentNo: '20230107', name: '郑楠', role: 'STUDENT', email: '20230107@campus.edu.cn', status: 1 },
+    { id: 10, studentNo: 't001', name: '张老师', role: 'TEACHER', email: 'zhang@campus.edu.cn', org: '摄影协会', status: 1 },
+    { id: 11, studentNo: 't002', name: '林老师', role: 'TEACHER', email: 'lin@campus.edu.cn', org: '体育运动中心', status: 1 },
+    { id: 12, studentNo: 't003', name: '王老师', role: 'TEACHER', email: 'wang@campus.edu.cn', org: '动漫社', status: 1 },
+    { id: 99, studentNo: 'admin', name: '陈老师', role: 'ADMIN', email: 'admin@campus.edu.cn', status: 1 }
   ];
+  const byNo = (no) => ALL_USERS.find((u) => u.studentNo === no);
 
   const LOGIN_USERS = {
-    STUDENT: ALL_USERS[0],
-    CLUB:    ALL_USERS[5],
-    ADMIN:   ALL_USERS[8]
+    STUDENT: byNo('20230101'),   // 李明：五种报名状态同屏的演示账号
+    TEACHER: byNo('t001'),       // 张老师：拥有要审核的活动与满员活动
+    ADMIN:   byNo('admin')      // 陈老师：活动监督 / 账号管理
   };
 
   const SURNAMES = ['王','李','张','刘','陈','杨','黄','赵','周','吴','徐','孙','马','朱','胡','郭','何','高','林','罗'];
   const GIVENS   = ['伟','芳','娜','敏','静','丽','强','磊','军','洋','勇','艳','杰','娟','涛','明','超','秀英','霞','平'];
   function mockStudent(i) {
     return {
-      userId: 1000 + i,
+      id: 1000 + i,
       studentNo: '2023' + (1000 + i),
       name: SURNAMES[i % 20] + GIVENS[(i * 7) % 20]
     };
@@ -393,177 +435,300 @@
     return [
       {
         id: 1, title: '秋日校园摄影展', emoji: '📷', categoryId: 1, organizerId: 10,
-        description: '面向全校师生征集秋日校园影像作品，评选出 30 幅优秀作品，在图书馆一层长廊展出两周。\n\n投稿要求：单张不小于 3MB，可作适度调色，不接受合成图；参展即视为同意学校用于非商业宣传。',
+        description: '面向全校师生征集秋日校园影像作品，评选出 30 幅优秀作品，在图书馆一层长廊展出两周。\n\n投稿要求：单张不小于 3MB，可作适度调色，不接受合成图。',
         startTime: iso(H(-3)), endTime: iso(H(21)), enrollDeadline: iso(H(-26)),
-        location: '图书馆一层长廊', capacity: 100, enrolledCount: 37,
-        status: 'ONGOING', checkInCode: '482913', checkedInCount: 21,
+        location: '图书馆一层长廊', capacity: 100, seedEnrolled: 37,
+        status: 'ONGOING', checkInCode: '482913', seedChecked: 21,
         createdAt: iso(H(-240))
       },
       {
         id: 2, title: '手机摄影技巧分享会', emoji: '📱', categoryId: 5, organizerId: 10,
         description: '主讲人：摄影协会技术组。内容涵盖构图、光线、后期调色三个板块，现场提供手机镜头试用。\n无需自备设备，欢迎零基础同学参加。',
         startTime: iso(H(72)), endTime: iso(H(75)), enrollDeadline: iso(H(48)),
-        location: '传媒楼 105', capacity: 60, enrolledCount: 12,
-        status: 'PUBLISHED', checkInCode: null, checkedInCount: 0,
+        location: '传媒楼 105', capacity: 60, seedEnrolled: 12,
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-96))
       },
       {
         id: 3, title: '新生篮球挑战赛', emoji: '🏀', categoryId: 2, organizerId: 11,
         description: '面向 2026 级新生的 3v3 篮球赛，自由组队报名，每队 3–5 人。\n赛制为小组循环 + 淘汰赛，前四名有奖品。',
         startTime: iso(H(168)), endTime: iso(H(178)), enrollDeadline: iso(H(120)),
-        location: '东区篮球场', capacity: 60, enrolledCount: 0,
-        status: 'PENDING', checkInCode: null, checkedInCount: 0,
+        location: '东区篮球场', capacity: 60, seedEnrolled: 0,
+        requiresReview: true, qualification: '面向 2026 级新生；自由组队，每队 3–5 人，报名时请备注队名。',
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-18))
       },
       {
         id: 4, title: '人工智能前沿讲座', emoji: '🤖', categoryId: 3, organizerId: 99,
         description: '邀请计算机学院李教授主讲，主题为「大模型时代的软件工程」。\n讲座计入创新学分，需提前 15 分钟入场签到。',
         startTime: iso(H(36)), endTime: iso(H(40)), enrollDeadline: iso(H(20)),
-        location: '计算机学院报告厅', capacity: 200, enrolledCount: 168,
-        status: 'PUBLISHED', checkInCode: null, checkedInCount: 0,
+        location: '计算机学院报告厅', capacity: 200, seedEnrolled: 168,
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-150))
       },
       {
-        id: 5, title: '周末爬山活动', emoji: '⛰️', categoryId: 2, organizerId: 11,
+        id: 5, title: '周末爬山活动', emoji: '⛰️', categoryId: 2, organizerId: 10,
         description: '香山半日徒步，全程约 6 公里，难度较低。\n请穿着运动鞋，自备饮水；集合后统一乘校车前往。',
-        startTime: iso(H(60)), endTime: iso(H(72)), enrollDeadline: iso(H(12)),
-        location: '香山西门集合', capacity: 30, enrolledCount: 30,
-        status: 'PUBLISHED', checkInCode: null, checkedInCount: 0,
+        startTime: iso(H(60)), endTime: iso(H(72)), enrollDeadline: iso(H(48)),
+        location: '香山西门集合', capacity: 30, seedEnrolled: 30,
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-200))
       },
       {
         id: 6, title: '图书馆志愿服务', emoji: '📚', categoryId: 4, organizerId: 99,
         description: '协助图书馆完成新书上架与书架整理工作，志愿服务时长 3 小时，计入志愿时长。',
         startTime: iso(H(-72)), endTime: iso(H(-68)), enrollDeadline: iso(H(-240)),
-        location: '图书馆二层', capacity: 60, enrolledCount: 45,
-        status: 'FINISHED', checkInCode: '205714', checkedInCount: 38,
+        location: '图书馆二层', capacity: 60, seedEnrolled: 45,
+        status: 'FINISHED', checkInCode: '205714', seedChecked: 38,
         createdAt: iso(H(-400))
       },
       {
         id: 7, title: '环保骑行', emoji: '🚴', categoryId: 4, organizerId: 99,
         description: '沿环湖绿道骑行 15 公里，沿途开展垃圾清理与环保宣传。\n自行车可现场租借，费用自理。',
         startTime: iso(H(-2)), endTime: iso(H(4)), enrollDeadline: iso(H(-48)),
-        location: '校门口集合', capacity: 50, enrolledCount: 25,
-        status: 'ONGOING', checkInCode: '730251', checkedInCount: 12,
+        location: '校门口集合', capacity: 50, seedEnrolled: 25,
+        status: 'ONGOING', checkInCode: '730251', seedChecked: 12,
         createdAt: iso(H(-260))
       },
       {
         id: 8, title: '书法体验工作坊', emoji: '🖌️', categoryId: 1, organizerId: 99,
         description: '邀请市书协老师现场指导楷书基础笔法，提供纸墨笔砚，作品可带走。',
         startTime: iso(H(48)), endTime: iso(H(52)), enrollDeadline: iso(H(-6)),
-        location: '人文楼 302', capacity: 40, enrolledCount: 20,
-        status: 'PUBLISHED', checkInCode: null, checkedInCount: 0,
+        location: '人文楼 302', capacity: 40, seedEnrolled: 20,
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-180))
       },
       {
         id: 9, title: '人像摄影体验日', emoji: '👤', categoryId: 5, organizerId: 10,
-        description: '提供人像布光设备与模特，社员一对一指导拍摄与后期。\n欢迎对摄影感兴趣的同学报名体验。',
+        description: '提供人像布光设备与模特，教师一对一指导拍摄与后期。\n欢迎对摄影感兴趣的同学报名体验。',
         startTime: iso(H(240)), endTime: iso(H(244)), enrollDeadline: iso(H(168)),
-        location: '传媒楼 105', capacity: 30, enrolledCount: 0,
-        status: 'PENDING', checkInCode: null, checkedInCount: 0,
+        location: '传媒楼 105', capacity: 30, seedEnrolled: 0,
+        requiresReview: true, qualification: '面向全体在校学生；需自备相机或可拍照的手机。',
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-9))
       },
       {
         id: 10, title: '电竞友谊赛', emoji: '🎮', categoryId: 2, organizerId: 11,
         description: '面向全校学生的电竞对抗赛，项目为团队竞技类，五人一队。',
         startTime: iso(H(120)), endTime: iso(H(126)), enrollDeadline: iso(H(72)),
-        location: '学生活动中心 B1', capacity: 64, enrolledCount: 0,
-        status: 'REJECTED', checkInCode: null, checkedInCount: 0,
-        rejectReason: '场地与学生活动中心消防演练时间冲突，请改期后重新提交。',
+        location: '学生活动中心 B1', capacity: 64, seedEnrolled: 0,
+        status: 'OFFLINE',
+        offlineReason: '场地与学生活动中心消防演练时间冲突，待核实后恢复',
+        offlineBy: '陈老师', offlineAt: iso(H(-12)),
+        checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-60))
       },
       {
         id: 11, title: '迎新晚会', emoji: '🎤', categoryId: 1, organizerId: 99,
         description: '校级迎新文艺晚会，含歌舞、话剧、乐队等节目。因场地检修取消。',
         startTime: iso(H(-200)), endTime: iso(H(-196)), enrollDeadline: iso(H(-480)),
-        location: '大学生活动中心', capacity: 500, enrolledCount: 213,
-        status: 'CANCELED', checkInCode: null, checkedInCount: 0,
+        location: '大学生活动中心', capacity: 500, seedEnrolled: 213,
+        status: 'CANCELED', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-600))
       },
       {
         id: 12, title: '校园夜景采风', emoji: '🌃', categoryId: 1, organizerId: 10,
         description: '夜间校园长曝光拍摄实践，需自带三脚架。草稿，细节待补充。',
         startTime: iso(H(312)), endTime: iso(H(316)), enrollDeadline: iso(H(240)),
-        location: '图书馆前广场', capacity: 30, enrolledCount: 0,
-        status: 'DRAFT', checkInCode: null, checkedInCount: 0,
+        location: '图书馆前广场', capacity: 30, seedEnrolled: 0,
+        status: 'DRAFT', checkInCode: null, seedChecked: 0,
         createdAt: iso(H(-3))
       },
       {
         id: 13, title: '考研经验分享会', emoji: '🎓', categoryId: 3, organizerId: 99,
         description: '邀请本届考研上岸的学长学姐分享备考经验与择校思路。',
         startTime: iso(H(-120)), endTime: iso(H(-117)), enrollDeadline: iso(H(-400)),
-        location: '图书馆报告厅', capacity: 80, enrolledCount: 76,
-        status: 'FINISHED', checkInCode: '119028', checkedInCount: 70,
+        location: '图书馆报告厅', capacity: 80, seedEnrolled: 76,
+        status: 'FINISHED', checkInCode: '119028', seedChecked: 70,
         createdAt: iso(H(-560))
+      },
+      {
+        id: 14, title: '荧光夜跑（限量装备）', emoji: '🏃', categoryId: 2, organizerId: 10,
+        description: '沿操场夜跑 5 公里，前 40 名报名者发放荧光手环与头带。\n路线沿途设两个补给点。',
+        startTime: iso(H(30)), endTime: iso(H(33)), enrollDeadline: iso(H(26)),
+        location: '田径场', capacity: 40, seedEnrolled: 40,
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
+        createdAt: iso(H(-100))
+      },
+      {
+        id: 15, title: '暗房冲洗进阶班（限 3 人 · 需审核）', emoji: '🧪', categoryId: 5, organizerId: 10,
+        description: '在暗房冲洗体验课的基础上，完成一轮从拍摄到成片的完整流程。',
+        startTime: iso(H(54)), endTime: iso(H(57)), enrollDeadline: iso(H(50)),
+        location: '艺术楼 B1 暗房', capacity: 3, seedEnrolled: 3,
+        requiresReview: true, qualification: '已完成「暗房冲洗体验」或自备黑白胶卷；限 3 人。',
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
+        createdAt: iso(H(-70))
+      },
+      {
+        id: 16, title: '陶艺体验课（小班）', emoji: '🏺', categoryId: 1, organizerId: 10,
+        description: '拉坯 + 上釉一次体验，作品烧制后一周可取。',
+        startTime: iso(H(44)), endTime: iso(H(47)), enrollDeadline: iso(H(40)),
+        location: '艺术楼 105', capacity: 12, seedEnrolled: 12,
+        status: 'PUBLISHED', checkInCode: null, seedChecked: 0,
+        createdAt: iso(H(-120))
       }
     ];
   }
 
-  const SUBMITTERS = {
-    1:  { name: '摄影协会', at: iso(H(-18)) },
-    3:  { name: '篮球社',   at: iso(H(-17)) },
-    9:  { name: '摄影协会', at: iso(H(-8)) },
-    10: { name: '篮球社',   at: iso(H(-59)) }
+  /* ---------- 预置的报名记录 ----------
+     一条报名记录 = 某人对某个活动的一次参与。V2.0 里它有五种状态；
+     候补队列由「状态为候补的记录按进入候补时间排序」构成。 */
+
+  const MY_SEED = [
+    // 五种状态同屏（李明 20230101）
+    { activityId: 1,  status: 'CONFIRMED',  enrolledAt: H(-200), checkInAt: null },     // 进行中·待签到
+    { activityId: 4,  status: 'CONFIRMED',  enrolledAt: H(-150), checkInAt: null },     // 待参加（在锁定窗口内）
+    { activityId: 5,  status: 'WAITLISTED', enrolledAt: H(-33),  waitlistedAt: H(-33) },// 满员 → 候补中（第 2 位）
+    { activityId: 6,  status: 'CONFIRMED',  enrolledAt: H(-300), checkInAt: H(-70) },   // 已签到
+    { activityId: 9,  status: 'PENDING',    enrolledAt: H(-20) },                       // 待审核（教师端可处理）
+    { activityId: 13, status: 'CONFIRMED',  enrolledAt: H(-420), checkInAt: null },     // 缺席（已结束未签到）
+    { activityId: 14, status: 'CONFIRMED',  enrolledAt: H(-80),  checkInAt: null },     // 正式（取消触发递补）
+    { activityId: 3,  status: 'REJECTED',   enrolledAt: H(-90),  reviewedAt: H(-60) },  // 已拒绝（可重新报名）
+    { activityId: 8,  status: 'CANCELED',   enrolledAt: H(-90),  canceledAt: H(-60) }   // 已取消（在截止前退出，现已不能重报）
+  ];
+
+  // 某个活动的候补队列 / 待审核申请（除「我」之外的其他人）
+  const OTHER_ENROLL_SEED = {
+    // 满员活动：候补队列按进入候补的时间先到先得
+    5:  { waitlist: [['20230102', -55], ['20230104', -12]] },   // 爬山：王芳第 1、孙悦第 3（我在中间排第 2）
+    14: { waitlist: [['20230102', -60], ['20230103', -45]] },   // 夜跑：王芳、赵启在后面等（我占着正式名额）
+    15: { pending:  [['20230106', 0], ['20230107', 0]] },       // 暗房进阶：吴桐、郑楠 的申请（满员，通过也只能进候补）
+    9:  { pending:  [['20230102', 0], ['20230103', 0], ['20230104', 0]] }, // 人像：王芳、赵启、孙悦（再加上"我"）
+    3:  { pending:  [['20230106', 0]] }                          // 篮球赛：吴桐的申请（审核教师是林老师）
   };
+
+  function makeEnrollments(activities) {
+    const list = [];
+    const push = (activityId, person, status, extra) => {
+      list.push(Object.assign({
+        id: list.length + 1,
+        activityId: activityId,
+        userId: person.id,
+        studentNo: person.studentNo,
+        name: person.name,
+        isMe: person.id === LOGIN_USERS.STUDENT.id,
+        status: status,
+        enrolledAt: iso(H(-40)),
+        waitlistedAt: null,
+        reviewedAt: null,
+        reviewedBy: null,
+        canceledAt: null,
+        checkInAt: null
+      }, extra || {}));
+    };
+
+    activities.forEach((a) => {
+      const mineConfirmed = MY_SEED.some((m) => m.activityId === a.id && m.status === 'CONFIRMED');
+      const mineCheckedOnIt = MY_SEED.some((m) => m.activityId === a.id && m.checkInAt);
+      const total = a.seedEnrolled - (mineConfirmed ? 1 : 0);
+      const checkedMocks = Math.max((a.seedChecked || 0) - (mineCheckedOnIt ? 1 : 0), 0);
+      for (let i = 0; i < total; i++) {
+        const s = mockStudent(a.id * 131 + i);
+        push(a.id, s, 'CONFIRMED', {
+          enrolledAt: iso(new Date(new Date(a.createdAt).getTime() + (i + 1) * 1500000)),
+          checkInAt: i < checkedMocks ? iso(new Date(a.startTime)) : null
+        });
+      }
+      // 其他人预置的候补 / 待审核
+      const seeds = OTHER_ENROLL_SEED[a.id];
+      if (seeds) {
+        (seeds.waitlist || []).forEach((item) => {
+          push(a.id, byNo(item[0]), 'WAITLISTED', {
+            enrolledAt: iso(H(item[1] - 1)),
+            waitlistedAt: iso(H(item[1]))
+          });
+        });
+        (seeds.pending || []).forEach((item) => {
+          push(a.id, byNo(item[0]), 'PENDING', { enrolledAt: iso(H(-18)) });
+        });
+      }
+    });
+
+    // 「我」的报名
+    MY_SEED.forEach((m) => push(m.activityId, LOGIN_USERS.STUDENT, m.status, {
+      enrolledAt: iso(m.enrolledAt),
+      waitlistedAt: m.waitlistedAt ? iso(m.waitlistedAt) : null,
+      reviewedAt: m.reviewedAt ? iso(m.reviewedAt) : null,
+      canceledAt: m.canceledAt ? iso(m.canceledAt) : null,
+      checkInAt: m.checkInAt ? iso(m.checkInAt) : null
+    }));
+
+    return list;
+  }
 
   /* =========================================================
      3. 应用状态
      ========================================================= */
-  const ME = LOGIN_USERS.STUDENT;
-  const MY_CLUB = LOGIN_USERS.CLUB;
-
   const state = {
     user: null,
     page: 'login',
     prevPage: 'plaza',
     detailId: null,
     rosterId: null,
-    rosterCache: {},
     filter: { keyword: '', categoryId: '', status: '' },
     listPage: 1,
     formError: '',
     formDraft: null,
     guideOpen: false,
-    lastSubmittedId: null,
     activities: makeActivities(),
+    enrollments: [],
     auditLogs: [
-      { id: 1, activityId: 10, operator: '陈老师', action: 'REJECT', reason: '场地与学生活动中心消防演练时间冲突，请改期后重新提交。', at: iso(H(-59)) },
-      { id: 2, activityId: 10, operator: '篮球社', action: 'SUBMIT', reason: '', at: iso(H(-59)) },
-      { id: 3, activityId: 1,  operator: '摄影协会', action: 'SUBMIT', reason: '', at: iso(H(-238)) },
-      { id: 4, activityId: 1,  operator: '陈老师', action: 'APPROVE', reason: '', at: iso(H(-236)) },
-      { id: 5, activityId: 11, operator: '陈老师', action: 'CANCEL', reason: '活动中心场地检修', at: iso(H(-300)) }
-    ],
-    myEnrollments: [
-      { activityId: 1,  at: iso(H(-200)), checkInAt: null },
-      { activityId: 4,  at: iso(H(-150)), checkInAt: null },
-      { activityId: 6,  at: iso(H(-300)), checkInAt: iso(H(-70)) },
-      { activityId: 13, at: iso(H(-420)), checkInAt: null }
+      { id: 1, activityId: 10, operator: '陈老师', action: 'OFFLINE', reason: '场地与学生活动中心消防演练时间冲突，待核实后恢复', at: iso(H(-12)) },
+      { id: 2, activityId: 10, operator: '林老师', action: 'PUBLISH', reason: '', at: iso(H(-60)) },
+      { id: 3, activityId: 11, operator: '陈老师', action: 'CANCEL', reason: '活动中心场地检修', at: iso(H(-300)) },
+      { id: 4, activityId: 1,  operator: '张老师', action: 'PUBLISH', reason: '', at: iso(H(-238)) }
     ]
   };
+  state.enrollments = makeEnrollments(state.activities);
 
   /* =========================================================
-     4. 数据访问
+     4. 数据访问与业务规则
      ========================================================= */
   const getAct = (id) => state.activities.find((a) => a.id === id);
   const catName = (id) => (CATEGORIES.find((c) => c.id === id) || {}).name || '未分类';
   const orgName = (id) => {
     const u = ALL_USERS.find((x) => x.id === id);
-    return u ? (u.clubName || u.name) : '未知';
+    return u ? (u.org || u.name) : '未知';
   };
   const isMineAct = (a) => state.user && a.organizerId === state.user.id;
-  const myEnroll = (id) => state.myEnrollments.find((m) => m.activityId === id);
+  const isTeacher = (u) => u && u.role === 'TEACHER';
 
-  /* 取消报名策略：距报名截止不足这个小时数起，名单锁定，不可再取消。
-     理由：组织者要提前按名单备料、排座位，临门撤人会直接影响活动执行。 */
-  const CANCEL_LOCK_HOURS = 24;
+  const ofActivity = (id) => state.enrollments.filter((e) => e.activityId === id);
+  const confirmedOf = (id) => ofActivity(id).filter((e) => e.status === 'CONFIRMED').length;
+  const checkedOf = (id) => ofActivity(id).filter((e) => e.status === 'CONFIRMED' && e.checkInAt).length;
+  const pendingOf = (id) => ofActivity(id).filter((e) => e.status === 'PENDING');
+  const isFull = (a) => confirmedOf(a.id) >= a.capacity;
+  const byQueueOrder = (a, b) =>
+    (new Date(a.waitlistedAt).getTime() - new Date(b.waitlistedAt).getTime()) || (a.id - b.id);
+  const waitlistOf = (id) => ofActivity(id).filter((e) => e.status === 'WAITLISTED').sort(byQueueOrder);
+  const myEnroll = (id) => state.enrollments.find((e) => e.activityId === id && e.isMe);
+  function waitlistPosition(e) {
+    const q = waitlistOf(e.activityId);
+    return q.findIndex((x) => x.id === e.id) + 1;
+  }
 
+  /** 卡片上的「报名状态标记」：可报名 / 已满员 · 可候补（FR-1.1）。 */
+  function enrollLine(a) {
+    if (a.status === 'OFFLINE') return '<span class="faint">该活动已下线</span>';
+    if (a.status === 'CANCELED') return '<span class="faint">该活动已取消</span>';
+    if (a.status === 'FINISHED') return '<span class="faint">该活动已结束</span>';
+    if (a.status === 'ONGOING') return '<span class="faint">活动已开始，报名通道已关闭</span>';
+    if (Date.now() >= new Date(a.enrollDeadline).getTime()) {
+      return '<span class="faint">报名已截止（' + fmtShort(a.enrollDeadline) + '）</span>';
+    }
+    if (a.status !== 'PUBLISHED') return '<span class="faint">该活动尚未发布</span>';
+    if (isFull(a)) return '<span class="full-mark">已满员 · 可候补</span>';
+    return '剩余 <b>' + (a.capacity - confirmedOf(a.id)) + '</b> / ' + a.capacity + ' 个名额 <span class="ok-mark">可报名</span>';
+  }
+
+  /** 报名通道是否开放；满员**不算**被拒——满员是候补的入口（BR-3）。 */
   function enrollBlockReason(a) {
-    if (a.status === 'DRAFT' || a.status === 'PENDING' || a.status === 'REJECTED') return '该活动尚未发布';
+    if (a.status === 'OFFLINE') return '该活动已被管理员下线，暂不接受报名';
     if (a.status === 'CANCELED') return '该活动已取消';
     if (a.status === 'FINISHED') return '该活动已结束';
     if (a.status === 'ONGOING') return '活动已开始，报名通道已关闭';
+    if (a.status !== 'PUBLISHED') return '该活动尚未发布';
     if (Date.now() >= new Date(a.enrollDeadline).getTime()) return '报名已截止';
-    if (a.enrolledCount >= a.capacity) return '名额已满';
     return '';
   }
 
@@ -572,12 +737,15 @@
     return new Date(a.enrollDeadline).getTime() - CANCEL_LOCK_HOURS * 3600000 - Date.now();
   }
 
-  /** 已报名的活动能否取消；返回空串表示可以取消。 */
-  function cancelBlockReason(a) {
+  /** 取消 / 退出 / 撤销能不能做；空串表示可以。 */
+  function cancelBlockReason(a, m) {
+    if (a.status === 'OFFLINE') return '该活动已被管理员下线，暂不能操作';
     if (a.status === 'CANCELED') return '活动已取消';
     if (a.status === 'FINISHED') return '活动已结束';
-    if (a.status === 'ONGOING') return '活动已开始，无法取消报名';
-    if (a.status !== 'PUBLISHED') return '当前状态不可取消报名';
+    if (m.status === 'PENDING' || m.status === 'WAITLISTED') return ''; // 不占名额，随时可撤 / 可退
+    if (a.status === 'ONGOING') return '活动已开始，名单已锁定';
+    if (a.status !== 'PUBLISHED') return '该活动尚未发布';
+    if (m.checkInAt) return '你已签到，无法取消报名';
     if (Date.now() >= new Date(a.enrollDeadline).getTime()) return '报名已截止，名单已锁定';
     if (msUntilCancelLock(a) <= 0) {
       return '距报名截止不足 ' + CANCEL_LOCK_HOURS + ' 小时，名单已锁定';
@@ -585,51 +753,35 @@
     return '';
   }
 
-  function rosterOf(activityId) {
-    if (!state.rosterCache[activityId]) {
-      const act = getAct(activityId);
-      const total = act.enrolledCount;
-      const mine = myEnroll(activityId);
-      const rows = [];
-      let othersChecked = (act.checkedInCount || 0) - (mine && mine.checkInAt ? 1 : 0);
-      if (othersChecked < 0) othersChecked = 0;
-
-      if (mine) {
-        rows.push({
-          key: 'me',
-          userId: ME.id, studentNo: ME.studentNo, name: ME.name,
-          isMe: true,
-          enrolledAt: mine.at,
-          checkInAt: mine.checkInAt
-        });
-      }
-      const others = Math.max(total - (mine ? 1 : 0), 0);
-      for (let i = 0; i < others; i++) {
-        const s = mockStudent(activityId * 131 + i);
-        rows.push({
-          key: 's' + i,
-          userId: s.userId, studentNo: s.studentNo, name: s.name,
-          isMe: false,
-          enrolledAt: iso(new Date(new Date(act.createdAt).getTime() + (i + 1) * 1500000)),
-          checkInAt: i < othersChecked ? iso(new Date(act.startTime)) : null
-        });
-      }
-      state.rosterCache[activityId] = rows;
+  /** 自动递补：名额空出时，队首逐位转正式（FR-4.5 / BR-6）。 */
+  function promoteWaitlist(activityId) {
+    const a = getAct(activityId);
+    const promoted = [];
+    if (!a || a.status !== 'PUBLISHED') return promoted;
+    for (;;) {
+      if (confirmedOf(activityId) >= a.capacity) break;
+      const queue = waitlistOf(activityId);
+      if (!queue.length) break;
+      queue[0].status = 'CONFIRMED';
+      promoted.push(queue[0]);
     }
-    return state.rosterCache[activityId];
+    return promoted;
   }
-  const invalidateRoster = (id) => { delete state.rosterCache[id]; };
 
   function statsOf(activityId) {
-    const act = getAct(activityId);
-    const rows = rosterOf(activityId);
-    const enrolled = rows.length;
-    const checked = rows.filter((r) => r.checkInAt).length;
+    const a = getAct(activityId);
+    const enrolled = confirmedOf(activityId);
+    const checked = checkedOf(activityId);
     return {
       enrolled: enrolled,
       checked: checked,
+      absent: enrolled - checked,
+      waitlisted: waitlistOf(activityId).length,
+      pending: pendingOf(activityId).length,
+      remaining: Math.max(a.capacity - enrolled, 0),
       rate: enrolled ? Math.round((checked / enrolled) * 1000) / 10 : 0,
-      capacity: act.capacity
+      fill: a.capacity ? Math.round((enrolled / a.capacity) * 1000) / 10 : 0,
+      capacity: a.capacity
     };
   }
 
@@ -657,7 +809,7 @@
       '<div class="modal">' +
         '<div class="modal-h">' + esc(opts.title) + '</div>' +
         '<div class="modal-b">' +
-          (opts.text ? '<div class="muted small" style="margin-bottom:10px">' + esc(opts.text) + '</div>' : '') +
+          (opts.text ? '<div class="muted small" style="margin-bottom:10px">' + nl2br(opts.text) + '</div>' : '') +
           (opts.input
             ? '<textarea id="modal-input" placeholder="' + esc(opts.placeholder || '') + '"></textarea>'
             : '') +
@@ -676,7 +828,8 @@
       if (act === 'cancel' || e.target === el) closeModal();
       else if (act === 'ok') {
         const val = input ? input.value.trim() : '';
-        if (input && !val) { toast('请填写内容后再提交', 'warn'); return; }
+        // 输入框默认必填；某些场景（如下线原因）允许留空，用 allowEmpty 放开
+        if (input && !val && !opts.allowEmpty) { toast('请填写内容后再提交', 'warn'); return; }
         // 注意：必须先把回调取出来再 closeModal —— closeModal 会把 modalOnOk 置空，
         // 顺序反了会导致「确定」按钮静默失效。
         const cb = modalOnOk;
@@ -710,7 +863,7 @@
     state.auditLogs.unshift({
       id: Date.now(),
       activityId: activityId,
-      operator: state.user ? (state.user.clubName || state.user.name) : '系统',
+      operator: state.user ? (state.user.org || state.user.name) : '系统',
       action: action,
       reason: reason || '',
       at: iso(new Date())
@@ -721,9 +874,9 @@
      6. 渲染 —— 登录页
      ========================================================= */
   const ROLE_CARDS = [
-    { role: 'STUDENT', icon: '🎒', bg: '#eef2f6', t: '我是学生', d: '浏览活动 · 报名 · 查看我的报名' },
-    { role: 'CLUB',    icon: '🎪', bg: '#f4f3ff', t: '我是社团', d: '创建活动 · 提交审核 · 签到核验 · 看名单' },
-    { role: 'ADMIN',   icon: '🛡️', bg: '#eff4ff', t: '我是管理员', d: '审核活动 · 直接发布 · 全局管理' }
+    { role: 'STUDENT', icon: '🎒', bg: '#eef2f6', t: '我是学生', d: '浏览活动 · 报名 / 加候补 · 查看我的报名' },
+    { role: 'TEACHER', icon: '🧑‍🏫', bg: '#f4f3ff', t: '我是活动组织教师', d: '发布活动 · 审核报名 · 名单与签到 · 数据统计' },
+    { role: 'ADMIN',   icon: '🛡️', bg: '#eff4ff', t: '我是系统管理员', d: '活动监督（下线 / 恢复） · 账号与分类管理' }
   ];
 
   function loginHtml() {
@@ -731,8 +884,8 @@
     return '' +
     '<div class="login-wrap"><div class="login-box">' +
       '<div class="login-left">' +
-        '<h1>校园活动管理系统</h1>' +
-        '<div class="sub">MVP 交互 Demo · 数据均为模拟，操作即时生效、刷新即重置</div>' +
+        '<h1>校园活动管理系统 <span class="tag">V2.0</span></h1>' +
+        '<div class="sub">交互 Demo · 数据均为模拟，操作即时生效、刷新即重置</div>' +
         ROLE_CARDS.map((c) =>
           '<button class="role-card" data-act="login" data-role="' + c.role + '">' +
             '<span class="role-ico" style="background:' + c.bg + '">' + c.icon + '</span>' +
@@ -742,20 +895,20 @@
           '</button>'
         ).join('') +
         '<div class="small faint" style="margin-top:14px">' +
-          '演示账号：' + esc(u.STUDENT.name) + '（学生） / ' + esc(u.CLUB.name) + '（社团） / ' + esc(u.ADMIN.name) + '（管理员）' +
+          '演示账号：' + esc(u.STUDENT.name) + '（学生） / ' + esc(u.TEACHER.name) + '（教师） / ' + esc(u.ADMIN.name) + '（管理员）' +
         '</div>' +
       '</div>' +
       '<div class="guide-box">' +
         '<h3>建议的体验路线</h3>' +
-        '<div class="small muted">按这个顺序走一遍，能覆盖全部状态流转</div>' +
+        '<div class="small muted">V2.0 的重点是候补与审核，按这个顺序走一遍</div>' +
         '<ol class="guide-list">' +
-          '<li>以 <b>学生</b> 进入「活动广场」，筛选、搜索，点进一个<b>已发布</b>的活动报名，观察剩余名额变化</li>' +
-          '<li>再报一个<b>名额已满</b>或<b>已截止</b>的活动，看拦截提示</li>' +
-          '<li>切到 <b>摄影协会</b>，「我的活动」里能看到草稿 / 待审核 / 进行中三种状态</li>' +
-          '<li>在「发布活动」新建一个活动并<b>提交审核</b></li>' +
-          '<li>切到 <b>管理员</b>，「审核中心」把刚才的活动<b>通过</b>；再驳回一个，填写理由</li>' +
-          '<li>切回 <b>摄影协会</b>，看状态如何变化，对被驳回的活动<b>重新提交</b></li>' +
-          '<li>在「报名与签到」勾选签到、看签到率实时变化、<b>导出 CSV 名单</b></li>' +
+          '<li>以 <b>学生</b> 进「活动广场」：看每张卡片的<b>可报名 / 已满员 · 可候补</b>标记</li>' +
+          '<li>报一个满员活动（如「陶艺体验课」）→ 直接<b>进入候补队列</b>并显示排位</li>' +
+          '<li>看「我的报名」：<b>待审核 / 正式 / 候补 / 已拒绝 / 已取消</b> 五种状态一页看全</li>' +
+          '<li>取消「荧光夜跑」的正式报名 → 观察<b>候补队首自动递补</b>（可切到教师端看名单）</li>' +
+          '<li>切到 <b>张老师</b> →「报名与签到」→ 审核「人像摄影体验日」的申请（通过 / 拒绝）</li>' +
+          '<li>再试「暗房冲洗进阶班」：<b>满员时的"通过"只能进候补</b>——通过 ≠ 一定参加</li>' +
+          '<li>切到 <b>管理员</b>：「活动监督」里把一个活动<b>下线</b>，回学生端看它消失；再恢复</li>' +
         '</ol>' +
       '</div>' +
     '</div></div>';
@@ -769,19 +922,17 @@
       { page: 'plaza', icon: '🧭', label: '活动广场' },
       { page: 'my',    icon: '📋', label: '我的报名' }
     ],
-    CLUB: [
-      { page: 'club-activities', icon: '📌', label: '我的活动' },
-      { page: 'club-create',     icon: '➕', label: '发布活动' },
-      { page: 'club-roster',     icon: '✅', label: '报名与签到' },
-      { page: 'club-stats',      icon: '📊', label: '数据统计' },
-      { page: 'plaza',           icon: '🧭', label: '活动广场' }
+    TEACHER: [
+      { page: 'teacher-activities', icon: '📌', label: '我的活动' },
+      { page: 'teacher-create',     icon: '➕', label: '发布活动' },
+      { page: 'teacher-roster',     icon: '✅', label: '报名与签到' },
+      { page: 'teacher-stats',      icon: '📊', label: '数据统计' },
+      { page: 'plaza',              icon: '🧭', label: '活动广场' }
     ],
     ADMIN: [
-      { page: 'admin-audit',      icon: '🔍', label: '审核中心' },
-      { page: 'admin-activities', icon: '🗂️', label: '全部活动' },
-      { page: 'admin-create',     icon: '➕', label: '发布活动' },
-      { page: 'admin-misc',       icon: '⚙️', label: '用户与分类' },
-      { page: 'plaza',            icon: '🧭', label: '活动广场' }
+      { page: 'admin-supervision', icon: '🛡️', label: '活动监督' },
+      { page: 'admin-misc',        icon: '⚙️', label: '用户与分类' },
+      { page: 'plaza',             icon: '🧭', label: '活动广场' }
     ]
   };
 
@@ -790,7 +941,7 @@
     const nav = NAV[u.role];
     return '' +
     '<header class="topbar">' +
-      '<div class="brand"><span class="logo">🎓</span> 校园活动管理系统 <span class="tag">Demo</span></div>' +
+      '<div class="brand"><span class="logo">🎓</span> 校园活动管理系统 <span class="tag">V2.0</span></div>' +
       '<div class="spacer"></div>' +
       '<button class="btn ghost sm" data-act="guide">📖 体验路线</button>' +
       '<div class="userbox">' +
@@ -816,22 +967,23 @@
 
   function guideDrawerHtml() {
     const items = [
-      ['学生报名', '活动广场 → 报名 → 我的报名'],
-      ['满员 / 截止拦截', '点已满或已截止的活动报名按钮'],
-      ['社团提交审核', '摄影协会 → 发布活动 → 提交审核'],
-      ['管理员审核', '管理员 → 审核中心 → 通过 / 驳回'],
-      ['驳回后重提', '摄影协会 → 我的活动 → 重新提交'],
-      ['签到与统计', '摄影协会 → 报名与签到 → 勾选 → 导出 CSV']
+      ['学生报名', '活动广场 → 找可报名的活动 → 立即报名'],
+      ['满员候补', '点满员活动（陶艺体验课）→ 加入候补 → 我的报名看排位'],
+      ['自动递补', '学生 → 我的报名 → 取消「荧光夜跑」→ 队首转正式'],
+      ['报名审核', '张老师 → 报名与签到 → 人像摄影体验日 → 通过 / 拒绝'],
+      ['通过≠正式', '张老师 → 报名与签到 → 暗房进阶班（满员）→ 通过后进候补'],
+      ['直接发布', '张老师 → 发布活动 → 可勾选「需要审核报名」'],
+      ['活动监督', '管理员 → 活动监督 → 下线 / 恢复；学生端立即生效']
     ];
     return '' +
     '<div class="mask">' +
-      '<div class="modal" style="max-width:450px">' +
+      '<div class="modal" style="max-width:470px">' +
         '<div class="modal-h">体验路线</div>' +
         '<div class="modal-b">' +
           '<table class="tb"><tbody>' +
             items.map((r, i) =>
               '<tr><td style="width:34px" class="faint">' + (i + 1) + '</td>' +
-              '<td style="width:110px;font-weight:500">' + esc(r[0]) + '</td>' +
+              '<td style="width:96px;font-weight:500">' + esc(r[0]) + '</td>' +
               '<td class="muted small">' + esc(r[1]) + '</td></tr>'
             ).join('') +
           '</tbody></table>' +
@@ -845,18 +997,16 @@
 
   function contentHtml() {
     switch (state.page) {
-      case 'plaza':            return plazaHtml();
-      case 'detail':           return detailHtml();
-      case 'my':               return myEnrollmentsHtml();
-      case 'club-activities':  return clubActivitiesHtml();
-      case 'club-create':      return createFormHtml('club');
-      case 'club-roster':      return rosterPageHtml();
-      case 'club-stats':       return clubStatsHtml();
-      case 'admin-audit':      return adminAuditHtml();
-      case 'admin-activities': return adminActivitiesHtml();
-      case 'admin-create':     return createFormHtml('admin');
-      case 'admin-misc':       return adminMiscHtml();
-      default:                 return '<div class="empty"><div class="ei">🤔</div>页面不存在</div>';
+      case 'plaza':              return plazaHtml();
+      case 'detail':             return detailHtml();
+      case 'my':                 return myEnrollmentsHtml();
+      case 'teacher-activities': return teacherActivitiesHtml();
+      case 'teacher-create':     return createFormHtml();
+      case 'teacher-roster':     return rosterPageHtml();
+      case 'teacher-stats':      return teacherStatsHtml();
+      case 'admin-supervision':  return adminSupervisionHtml();
+      case 'admin-misc':         return adminMiscHtml();
+      default:                   return '<div class="empty"><div class="ei">🤔</div>页面不存在</div>';
     }
   }
 
@@ -884,7 +1034,7 @@
     return '' +
     '<div class="page-head">' +
       '<h2>活动广场</h2>' +
-      '<p>共 <b id="plaza-count">' + filteredActivities().length + '</b> 个活动可浏览 · 报名截止后自动关闭报名入口</p>' +
+      '<p>共 <b id="plaza-count">' + filteredActivities().length + '</b> 个活动可浏览 · 满员的活动仍可<b>加入候补</b>，名额空出时自动递补</p>' +
     '</div>' +
     '<div class="filters">' +
       '<input class="search" id="plaza-search" data-act="search" placeholder="搜索活动标题、简介或地点…" value="' + esc(state.filter.keyword) + '">' +
@@ -920,29 +1070,31 @@
 
   function acardHtml(a) {
     const mine = myEnroll(a.id);
-    const pct = Math.min(100, Math.round((a.enrolledCount / a.capacity) * 100));
-    const full = a.enrolledCount >= a.capacity;
-    const closed = Date.now() >= new Date(a.enrollDeadline).getTime();
+    const confirmed = confirmedOf(a.id);
+    const pct = Math.min(100, Math.round((confirmed / a.capacity) * 100));
+    const full = isFull(a);
     return '' +
     '<div class="acard" data-act="detail" data-id="' + a.id + '">' +
       '<div class="acover t-' + toneOf(a.categoryId) + '">' + a.emoji +
         '<span class="st-badge">' + badge(a.status) + '</span>' +
       '</div>' +
       '<div class="abody">' +
-        '<div class="atitle">' + esc(a.title) + '</div>' +
+        '<div class="atitle">' + esc(a.title) +
+          (a.requiresReview ? ' <span class="badge st-pending">需审核</span>' : '') +
+        '</div>' +
         '<div class="ameta">' +
           '<div>🏷️ ' + esc(catName(a.categoryId)) + ' · ' + esc(orgName(a.organizerId)) + '</div>' +
           '<div>🕐 ' + fmtShort(a.startTime) + ' · ' + esc(a.location) + '</div>' +
-          '<div>' + (closed ? '🔒 报名已截止' : '⏳ 报名' + untilText(a.enrollDeadline)) + '</div>' +
+          '<div>' + enrollLine(a) + '</div>' +
         '</div>' +
         '<div class="progress ' + (full ? 'full' : pct >= 80 ? 'warn' : '') + '"><i style="width:' + pct + '%"></i></div>' +
         '<div class="afoot">' +
-          '<span class="small ' + (full ? 'faint' : 'muted') + '">' +
-            a.enrolledCount + ' / ' + a.capacity + ' 人' +
-            (full ? '（已满）' : '') +
-          '</span>' +
+          '<span class="small ' + (full ? 'faint' : 'muted') + '">' + confirmed + ' / ' + a.capacity + ' 人' +
+            (full ? '（已满）' : '') + '</span>' +
           '<span class="spacer"></span>' +
-          (mine ? '<span class="badge st-ongoing">已报名</span>' : '') +
+          (mine && mine.status === 'CONFIRMED' ? '<span class="badge st-ongoing">我 · 正式</span>' : '') +
+          (mine && mine.status === 'WAITLISTED' ? '<span class="badge st-waitlist">我 · 候补</span>' : '') +
+          (mine && mine.status === 'PENDING' ? '<span class="badge st-pending">我 · 待审核</span>' : '') +
         '</div>' +
       '</div>' +
     '</div>';
@@ -976,51 +1128,104 @@
   /* =========================================================
      9. 学生 —— 活动详情
      ========================================================= */
+  function detailActionHtml(a) {
+    const mine = myEnroll(a.id);
+
+    // —— 已报名（三种有效状态）——
+    if (mine && ACTIVE_ENROLL.indexOf(mine.status) !== -1) {
+      if (mine.status === 'CONFIRMED') {
+        const cancelBlock = cancelBlockReason(a, mine);
+        const lockAt = new Date(new Date(a.enrollDeadline).getTime() - CANCEL_LOCK_HOURS * 3600000);
+        return '<div class="badge st-ongoing" style="margin-bottom:10px">✅ 正式参加</div>' +
+          '<div class="small muted" style="margin-bottom:12px">报名时间：' + fmt(mine.enrolledAt) + '</div>' +
+          (mine.checkInAt
+            ? '<div class="callout" style="margin-bottom:12px">已签到：' + fmt(mine.checkInAt) + '</div>'
+            : '<div class="callout warn" style="margin-bottom:12px">尚未签到。活动开始后凭签到码签到。</div>') +
+          (cancelBlock
+            ? '<button class="btn" style="width:100%" disabled>' + esc(cancelBlock) + '</button>' +
+              '<div class="hint" style="margin-top:10px;text-align:center">' +
+                (a.status === 'PUBLISHED' ? '报名截止前 ' + CANCEL_LOCK_HOURS + ' 小时起，名单即锁定' : '') + '</div>'
+            : '<button class="btn danger" style="width:100%" data-act="unenroll" data-id="' + a.id + '">取消报名</button>' +
+              '<div class="hint" style="margin-top:10px;text-align:center">' +
+                '可取消至 ' + fmtShort(iso(lockAt)) + '（取消后名额自动递给候补队首）</div>');
+      }
+      if (mine.status === 'WAITLISTED') {
+        return '<div class="badge st-waitlist" style="margin-bottom:10px">候补中 · 第 ' + waitlistPosition(mine) + ' 位</div>' +
+          '<div class="small muted" style="margin-bottom:12px">进入候补：' + fmt(mine.waitlistedAt) + '</div>' +
+          '<div class="callout warn" style="margin-bottom:12px">名额空出时按队列顺序<b>自动递补</b>，无需任何操作。</div>' +
+          '<button class="btn danger" style="width:100%" data-act="unenroll" data-id="' + a.id + '">退出候补</button>' +
+          '<div class="hint" style="margin-top:10px;text-align:center">候补不占名额，随时可以退出（队列不留空档）</div>';
+      }
+      // PENDING
+      return '<div class="badge st-pending" style="margin-bottom:10px">待审核 · 等待组织教师确认</div>' +
+        '<div class="small muted" style="margin-bottom:12px">申请时间：' + fmt(mine.enrolledAt) + '</div>' +
+        '<div class="callout" style="margin-bottom:12px">通过的是<b>资格</b>：教师通过时还有余位才转「正式」，没有余位进候补队列。</div>' +
+        '<button class="btn danger" style="width:100%" data-act="unenroll" data-id="' + a.id + '">撤销申请</button>' +
+        '<div class="hint" style="margin-top:10px;text-align:center">不占名额，随时可以撤销</div>';
+    }
+
+    // —— 已拒绝 / 已取消：终态，可以重新报名（按新时间重新排队）——
+    if (mine && (mine.status === 'REJECTED' || mine.status === 'CANCELED')) {
+      const note = mine.status === 'REJECTED'
+        ? '<div class="callout danger" style="margin-bottom:12px">申请未通过' + (mine.reviewedAt ? '（' + fmt(mine.reviewedAt) + '）' : '') + '。如仍符合条件，可以重新报名。</div>'
+        : '<div class="callout" style="margin-bottom:12px">你已取消这次报名。重新报名会按<b>新的</b>时间重新排队。</div>';
+      const block = enrollBlockReason(a);
+      if (block) {
+        return note + '<button class="btn" style="width:100%" disabled>' + esc(block) + '</button>';
+      }
+      return note +
+        '<button class="btn primary" style="width:100%" data-act="enroll" data-id="' + a.id + '">重新报名</button>' +
+        '<div class="hint" style="margin-top:10px;text-align:center">' +
+          (a.requiresReview ? '需要审核，提交后进入待审核' : isFull(a) ? '活动已满员，将进入候补队列' : '') + '</div>';
+    }
+
+    // —— 从未报名 ——
+    const reason = enrollBlockReason(a);
+    if (reason) {
+      return '<button class="btn primary" style="width:100%" disabled>' + esc(reason) + '</button>' +
+        '<div class="hint" style="margin-top:10px;text-align:center">' +
+          (isFull(a) && a.status === 'PUBLISHED' && Date.now() < new Date(a.enrollDeadline).getTime()
+            ? '可关注后续是否有名额释放' : '') + '</div>';
+    }
+    if (a.requiresReview) {
+      return '<button class="btn primary" style="width:100%" data-act="enroll" data-id="' + a.id + '">提交报名申请</button>' +
+        '<div class="hint" style="margin-top:10px;text-align:center">该活动需组织教师审核；通过后按当时余位确定为「正式」或「候补」</div>';
+    }
+    if (isFull(a)) {
+      return '<button class="btn warn" style="width:100%" data-act="enroll" data-id="' + a.id + '">加入候补队列</button>' +
+        '<div class="hint" style="margin-top:10px;text-align:center">活动已满员，现在报名会进入候补，名额空出时<b>自动递补</b></div>';
+    }
+    return '<button class="btn primary" style="width:100%" data-act="enroll" data-id="' + a.id + '">立即报名</button>' +
+      '<div class="hint" style="margin-top:10px;text-align:center">报名后可在「我的报名」中查看</div>';
+  }
+
   function detailHtml() {
     const a = getAct(state.detailId);
     if (!a) return '<div class="empty"><div class="ei">❓</div>活动不存在</div>';
+
     const BACK = {
-      plaza: '活动广场', my: '我的报名', 'club-activities': '我的活动',
-      'admin-activities': '全部活动', 'admin-audit': '审核中心'
+      plaza: '活动广场', my: '我的报名', 'teacher-activities': '我的活动',
+      'admin-supervision': '活动监督'
     };
     const backPage = BACK[state.prevPage] ? state.prevPage : 'plaza';
     const mine = myEnroll(a.id);
-    const reason = enrollBlockReason(a);
-    const pct = Math.min(100, Math.round((a.enrolledCount / a.capacity) * 100));
+    const confirmed = confirmedOf(a.id);
+    const pct = Math.min(100, Math.round((confirmed / a.capacity) * 100));
     const cat = (CATEGORIES.find((c) => c.id === a.categoryId) || {}).name || '未分类';
 
-    let actionArea = '';
-    if (mine) {
-      const cancelBlock = cancelBlockReason(a);
-      const canCancel = !cancelBlock;
-      const lockAt = new Date(new Date(a.enrollDeadline).getTime() - CANCEL_LOCK_HOURS * 3600000);
-      actionArea =
-        '<div class="badge st-ongoing" style="margin-bottom:10px">✅ 你已报名该活动</div>' +
-        '<div class="small muted" style="margin-bottom:12px">报名时间：' + fmt(mine.at) + '</div>' +
-        (mine.checkInAt
-          ? '<div class="callout" style="margin-bottom:12px">已签到：' + fmt(mine.checkInAt) + '</div>'
-          : '<div class="callout warn" style="margin-bottom:12px">尚未签到。活动开始后由组织者核验。</div>') +
-        (canCancel
-          ? '<button class="btn danger" style="width:100%" data-act="unenroll" data-id="' + a.id + '">取消报名</button>' +
-            '<div class="hint" style="margin-top:10px;text-align:center">' +
-              '可取消至 ' + fmtShort(iso(lockAt)) + '（名单锁定后不可撤）</div>'
-          : '<button class="btn" style="width:100%" disabled>' + esc(cancelBlock) + '</button>' +
-            '<div class="hint" style="margin-top:10px;text-align:center">' +
-              (a.status === 'PUBLISHED' ? '报名截止前 ' + CANCEL_LOCK_HOURS + ' 小时起，名单即锁定' : '') + '</div>');
-    } else if (reason) {
-      actionArea =
-        '<button class="btn primary" style="width:100%" disabled>' + esc(reason) + '</button>' +
-        '<div class="hint" style="margin-top:10px;text-align:center">' +
-          (reason === '名额已满' ? '可关注后续是否有名额释放' : '') + '</div>';
-    } else {
-      actionArea =
-        '<button class="btn primary" style="width:100%" data-act="enroll" data-id="' + a.id + '">立即报名</button>' +
-        '<div class="hint" style="margin-top:10px;text-align:center">报名后可在「我的报名」中查看</div>';
+    // 被下线的活动：学生不可见（但教师/管理员看得到，并带处理标记）
+    const isOrganizerOrAdmin = state.user && (isMineAct(a) || state.user.role === 'ADMIN');
+    if (a.status === 'OFFLINE' && !isOrganizerOrAdmin) {
+      return '<div class="row" style="margin-bottom:14px">' +
+        '<button class="btn ghost sm" data-act="nav" data-page="' + backPage + '">← 返回' + BACK[backPage] + '</button>' +
+      '</div>' +
+      '<div class="card"><div class="empty"><div class="ei">📴</div>该活动已被管理员下线，不再展示<br>' +
+      '<span class="small">如有疑问请联系活动组织教师</span></div></div>';
     }
 
     let orgBox = '';
     if (isMineAct(a)) {
-      orgBox = '<div class="callout" style="margin-top:16px">这是你创建的活动，可在左侧「我的活动」中管理。</div>';
+      orgBox = '<div class="callout" style="margin-top:16px">这是你负责的活动，可在左侧「我的活动」中管理；管理员的下线处理也会在这里显示。</div>';
     }
 
     return '' +
@@ -1031,12 +1236,19 @@
       '<div class="dh-ico">' + a.emoji + '</div>' +
       '<div style="flex:1;min-width:0">' +
         '<div class="row" style="margin-bottom:4px">' + badge(a.status) +
+          (a.requiresReview ? '<span class="badge st-pending">需审核</span>' : '') +
           '<span class="badge st-draft">' + esc(cat) + '</span>' +
         '</div>' +
         '<h2 style="margin:0 0 4px;font-size:21px">' + esc(a.title) + '</h2>' +
-        '<div class="muted small">主办：' + esc(orgName(a.organizerId)) + '</div>' +
+        '<div class="muted small">组织教师：' + esc(orgName(a.organizerId)) + '</div>' +
       '</div>' +
     '</div>' +
+    (a.status === 'OFFLINE'
+      ? '<div class="callout danger" style="margin-bottom:16px"><b>该活动已被管理员下线</b>，学生端不再展示、不能报名。' +
+        (a.offlineReason ? '<br>下线原因：' + esc(a.offlineReason) : '') +
+        (a.offlineBy ? '<br><span class="small">处理人：' + esc(a.offlineBy) + '　' + fmtShort(a.offlineAt) + '</span>' : '') +
+        '</div>'
+      : '') +
     '<div class="detail-grid">' +
       '<div class="card card-pad">' +
         '<h3 style="margin:0 0 14px;font-size:15px">活动信息</h3>' +
@@ -1047,22 +1259,26 @@
           '<dt>报名截止</dt><dd>' + fmt(a.enrollDeadline) +
             ' <span class="small ' + (Date.now() >= new Date(a.enrollDeadline).getTime() ? 'faint' : 'muted') + '">（' + untilText(a.enrollDeadline) + '）</span></dd>' +
           '<dt>人数上限</dt><dd>' + a.capacity + ' 人</dd>' +
-          '<dt>当前报名</dt><dd>' + a.enrolledCount + ' 人' +
+          '<dt>正式名额</dt><dd>' + confirmed + ' / ' + a.capacity + ' 人' +
             '<div class="progress" style="max-width:220px;margin-top:6px"><i style="width:' + pct + '%"></i></div></dd>' +
+          '<dt>报名方式</dt><dd>' + (a.requiresReview
+            ? '需组织教师审核；通过后按当时余位确定「正式」或「候补」'
+            : '无需审核：有余位直接「正式」，满员自动进入「候补」') + '</dd>' +
+          (a.qualification ? '<dt>参加资格</dt><dd>' + esc(a.qualification) + '</dd>' : '') +
         '</dl>' +
         '<div class="divider"></div>' +
         '<h3 style="margin:0 0 8px;font-size:15px">活动简介</h3>' +
         '<div style="color:#475467;line-height:1.75" class="small">' + nl2br(a.description) + '</div>' +
-        (a.rejectReason
-          ? '<div class="divider"></div><div class="callout warn"><b>驳回原因：</b>' + esc(a.rejectReason) + '</div>'
-          : '') +
         orgBox +
       '</div>' +
       '<div class="side-card">' +
         '<div class="small muted" style="margin-bottom:6px">剩余名额</div>' +
-        '<div class="big-num" style="margin-bottom:2px">' + Math.max(a.capacity - a.enrolledCount, 0) + ' <span class="small faint">/ ' + a.capacity + '</span></div>' +
+        '<div class="big-num" style="margin-bottom:2px">' + Math.max(a.capacity - confirmed, 0) + ' <span class="small faint">/ ' + a.capacity + '</span></div>' +
+        (waitlistOf(a.id).length
+          ? '<div class="small" style="color:var(--warn);margin-bottom:2px">候补队列 ' + waitlistOf(a.id).length + ' 人</div>'
+          : '') +
         '<div class="divider"></div>' +
-        actionArea +
+        detailActionHtml(a) +
       '</div>' +
     '</div>';
   }
@@ -1071,107 +1287,124 @@
      10. 学生 —— 我的报名
      ========================================================= */
   function enrollStateText(a, m) {
-    if (m.checkInAt) return '<span class="badge st-ongoing">已签到</span>';
-    if (a.status === 'FINISHED') return '<span class="badge st-rejected">缺席</span>';
-    if (a.status === 'CANCELED') return '<span class="badge st-canceled">活动已取消</span>';
-    if (a.status === 'ONGOING') return '<span class="badge st-draft">待签到</span>';
-    return '<span class="badge st-published">待参加</span>';
+    if (m.status === 'PENDING') return '<span class="badge st-pending">待审核</span>';
+    if (m.status === 'WAITLISTED') return '<span class="badge st-waitlist">候补中 · 第 ' + waitlistPosition(m) + ' 位</span>';
+    if (m.status === 'REJECTED') return '<span class="badge st-rejected">已拒绝</span>' + (m.reviewedAt ? ' <span class="small faint">' + fmtShort(m.reviewedAt) + '</span>' : '');
+    if (m.status === 'CANCELED') return '<span class="badge st-canceled">已取消</span>';
+    // 正式：再叠加签到状态
+    if (m.checkInAt) return '<span class="badge st-ongoing">正式参加</span> <span class="badge st-ongoing">已签到</span>';
+    if (a.status === 'FINISHED') return '<span class="badge st-ongoing">正式参加</span> <span class="badge st-rejected">缺席</span>';
+    if (a.status === 'ONGOING') return '<span class="badge st-ongoing">正式参加</span> <span class="badge st-draft">待签到</span>';
+    return '<span class="badge st-ongoing">正式参加</span> <span class="badge st-published">待参加</span>';
+  }
+
+  function actionLabelOf(status) {
+    if (status === 'CONFIRMED') return '取消报名';
+    if (status === 'WAITLISTED') return '退出候补';
+    return '撤销申请';
   }
 
   function myEnrollmentsHtml() {
-    const list = state.myEnrollments
+    const list = state.enrollments
+      .filter((m) => m.isMe)
       .map((m) => ({ m: m, a: getAct(m.activityId) }))
       .filter((x) => x.a)
-      .sort((x, y) => new Date(y.a.startTime) - new Date(x.a.startTime));
+      .sort((x, y) => new Date(y.m.enrolledAt) - new Date(x.m.enrolledAt));
 
     if (!list.length) {
       return '<div class="page-head"><h2>我的报名</h2></div>' +
         '<div class="card"><div class="empty"><div class="ei">📭</div>还没有报名任何活动<br>' +
         '<span class="small">去「活动广场」看看吧</span></div></div>';
     }
-    const finished = list.filter((x) => x.a.status === 'FINISHED');
-    const attended = finished.filter((x) => x.m.checkInAt).length;
 
     return '' +
     '<div class="page-head">' +
       '<h2>我的报名</h2>' +
-      '<p>共 ' + list.length + ' 条报名记录' +
-        (finished.length ? ' · 已结束 ' + finished.length + ' 场，实到 ' + attended + ' 场' : '') +
-      '</p>' +
+      '<p>状态（待审核 / 正式 / 候补）、候补排位与取消规则都在这页 · 共 ' + list.length + ' 条记录</p>' +
+    '</div>' +
+    '<div class="callout" style="margin-bottom:16px">' +
+      '<b>报名状态说明：</b>' +
+      enrollBadge('CONFIRMED') + ' 已占名额；' +
+      enrollBadge('WAITLISTED') + ' 不占名额、按进入候补的时间排队，名额空出时自动递补；' +
+      enrollBadge('PENDING') + ' 等待教师确认，通过后按当时余位确定落位。' +
     '</div>' +
     '<div class="card tbl-wrap">' +
       '<table class="tb">' +
-        '<thead><tr><th>活动</th><th>时间</th><th>地点</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>' +
+        '<thead><tr><th>活动</th><th>时间</th><th>地点</th><th>我的状态</th><th style="text-align:right">操作</th></tr></thead>' +
         '<tbody>' +
         list.map((x) => {
-          const cancelBlock = cancelBlockReason(x.a);
+          const m = x.m;
+          const isActive = ACTIVE_ENROLL.indexOf(m.status) !== -1;
+          const block = isActive ? cancelBlockReason(x.a, m) : '该记录已结束';
+          const canAct = isActive && !block;
           return '<tr>' +
             '<td><b>' + x.a.emoji + ' ' + esc(x.a.title) + '</b><div class="small faint">' + esc(orgName(x.a.organizerId)) + '</div></td>' +
             '<td class="muted small">' + fmtShort(x.a.startTime) + '</td>' +
             '<td class="muted small">' + esc(x.a.location) + '</td>' +
-            '<td>' + enrollStateText(x.a, x.m) + '</td>' +
+            '<td>' + enrollStateText(x.a, m) + '</td>' +
             '<td style="text-align:right">' +
               '<button class="btn sm" data-act="detail" data-id="' + x.a.id + '">查看</button> ' +
-              (cancelBlock
-                ? '<span class="small faint">' + esc(cancelBlock) + '</span>'
-                : '<button class="btn sm danger" data-act="unenroll" data-id="' + x.a.id + '">取消报名</button>') +
+              (canAct
+                ? '<button class="btn sm danger" data-act="unenroll" data-id="' + x.a.id + '">' + actionLabelOf(m.status) + '</button>'
+                : !isActive
+                  ? '<button class="btn sm" data-act="detail" data-id="' + x.a.id + '">重新报名</button>'
+                  : '<span class="small faint">' + esc(block) + '</span>') +
             '</td>' +
           '</tr>';
         }).join('') +
         '</tbody>' +
       '</table>' +
     '</div>' +
-    '<div class="callout" style="margin-top:16px">' +
-      '「缺席」= 活动已结束但没有签到记录。统计签到率时，这类记录会计入报名总数但不计入实到人数。' +
-    '</div>' +
-    '<div class="callout warn" style="margin-top:10px">' +
-      '<b>取消报名规则：</b>报名截止前 ' + CANCEL_LOCK_HOURS + ' 小时起，名单即锁定，不可再取消；' +
-      '活动开始后同样不可取消。这是为了让组织者能按稳定名单备料。' +
+    '<div class="callout warn" style="margin-top:16px">' +
+      '<b>取消规则：</b>「正式」报名的取消有名单锁定——距报名截止不足 ' + CANCEL_LOCK_HOURS + ' 小时起、活动开始后均不可取消；' +
+      '「候补 / 待审核」不占名额，<b>随时可退可撤</b>。' +
     '</div>';
   }
 
   /* =========================================================
-     11. 社团 —— 我的活动
+     11. 教师 —— 我的活动
      ========================================================= */
-  function clubActions(a) {
+  function teacherActions(a) {
     const btns = [];
     if (a.status === 'DRAFT') {
-      btns.push(['submit-audit', 'primary', '提交审核']);
-    }
-    if (a.status === 'PENDING') {
-      btns.push(['withdraw', '', '撤回']);
-    }
-    if (a.status === 'REJECTED') {
-      btns.push(['resubmit', 'primary', '修改后重新提交']);
+      btns.push(['publish-activity', 'primary', '发布活动']);
+      btns.push(['cancel-activity', 'danger', '取消']);
     }
     if (a.status === 'PUBLISHED') {
       btns.push(['goto-roster', '', '报名与签到']);
+      btns.push(['goto-stats', '', '数据统计']);
       btns.push(['cancel-activity', 'danger', '取消活动']);
     }
     if (a.status === 'ONGOING') {
-      btns.push(['goto-roster', 'primary', '签到核验']);
+      btns.push(['goto-roster', 'primary', '报名与签到（签到中）']);
+      btns.push(['goto-stats', '', '数据统计']);
+      btns.push(['cancel-activity', 'danger', '取消活动']);
     }
-    if (a.status === 'FINISHED' || a.status === 'CANCELED') {
-      btns.push(['goto-stats', '', '查看统计']);
+    if (a.status === 'FINISHED') {
+      btns.push(['goto-roster', '', '报名与签到']);
+      btns.push(['goto-stats', '', '数据统计']);
+    }
+    if (a.status === 'OFFLINE' || a.status === 'CANCELED') {
+      btns.push(['detail', '', '查看']);
     }
     return btns.map((b) =>
       '<button class="btn sm ' + b[1] + '" data-act="' + b[0] + '" data-id="' + a.id + '">' + b[2] + '</button>'
     ).join(' ');
   }
 
-  function clubActivitiesHtml() {
+  function teacherActivitiesHtml() {
     const mine = state.activities
       .filter((a) => isMineAct(a))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    const groups = ['DRAFT', 'PENDING', 'REJECTED', 'PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'];
+    const groups = ['DRAFT', 'PUBLISHED', 'ONGOING', 'FINISHED', 'OFFLINE', 'CANCELED'];
     const counts = {};
     groups.forEach((g) => { counts[g] = mine.filter((a) => a.status === g).length; });
 
     return '' +
     '<div class="page-head">' +
       '<h2>我的活动</h2>' +
-      '<p>' + esc(state.user.clubName || state.user.name) + ' 共创建 ' + mine.length + ' 个活动 · 提交审核后由校级管理员处理</p>' +
+      '<p>' + esc(state.user.org || state.user.name) + ' 共负责 ' + mine.length + ' 个活动 · 创建后直接发布；管理员只在你违规时才会介入（下线 / 恢复）</p>' +
     '</div>' +
     '<div class="chips">' +
       groups.filter((g) => counts[g]).map((g) =>
@@ -1181,13 +1414,13 @@
     (mine.length === 0
       ? '<div class="card"><div class="empty"><div class="ei">📌</div>还没有创建活动<br>' +
         '<span class="small">点左侧「发布活动」开始</span></div></div>'
-      : mine.map((a) => clubActRowHtml(a)).join('')
+      : mine.map((a) => teacherActRowHtml(a)).join('')
     );
   }
 
-  function clubActRowHtml(a) {
-    const st = statsOf(a.id);
-    const canManage = a.status === 'PUBLISHED' || a.status === 'ONGOING' || a.status === 'FINISHED';
+  function teacherActRowHtml(a) {
+    const s = statsOf(a.id);
+    const canManage = ['PUBLISHED', 'ONGOING', 'FINISHED'].indexOf(a.status) !== -1;
     return '' +
     '<div class="card" style="margin-bottom:13px">' +
       '<div style="display:flex;gap:14px;padding:16px 18px;align-items:flex-start">' +
@@ -1195,39 +1428,41 @@
         '<div style="flex:1;min-width:0">' +
           '<div class="row" style="margin-bottom:3px">' +
             '<b style="font-size:14.5px">' + esc(a.title) + '</b>' + badge(a.status) +
+            (a.requiresReview ? '<span class="badge st-pending">需审核</span>' : '') +
+            (s.pending ? '<span class="badge st-pending">待审核 ' + s.pending + ' 条</span>' : '') +
+            (s.waitlisted ? '<span class="badge st-waitlist">候补 ' + s.waitlisted + ' 人</span>' : '') +
           '</div>' +
           '<div class="small muted">' +
             '🏷️ ' + esc(catName(a.categoryId)) + '　🕐 ' + fmtShort(a.startTime) + '　📍 ' + esc(a.location) + '　👥 ' + a.capacity + ' 人上限' +
           '</div>' +
           (canManage
-            ? '<div class="small" style="margin-top:5px">📊 报名 <b>' + st.enrolled + '</b> 人　实到 <b>' + st.checked + '</b> 人　签到率 <b>' + st.rate + '%</b></div>'
+            ? '<div class="small" style="margin-top:5px">📊 正式 <b>' + s.enrolled + '</b> 人　候补 <b>' + s.waitlisted + '</b> 人　实到 <b>' + s.checked + '</b> 人</div>'
             : '') +
-          (a.rejectReason
-            ? '<div class="callout warn" style="margin-top:9px"><b>驳回原因：</b>' + esc(a.rejectReason) + '</div>'
+          (a.status === 'OFFLINE'
+            ? '<div class="callout danger" style="margin-top:9px">已被管理员下线' +
+              (a.offlineReason ? '：' + esc(a.offlineReason) : '') +
+              (a.offlineBy ? '<span class="small faint">（' + esc(a.offlineBy) + ' · ' + fmtShort(a.offlineAt) + '）</span>' : '') +
+              '</div>'
             : '') +
         '</div>' +
-        '<div class="row" style="flex:none;gap:7px">' + clubActions(a) + '</div>' +
+        '<div class="row" style="flex:none;gap:7px">' + teacherActions(a) + '</div>' +
       '</div>' +
     '</div>';
   }
 
   /* =========================================================
-     12. 社团 / 管理员 —— 创建活动表单
+     12. 教师 —— 发布活动表单
      ========================================================= */
   const EMOJI_CHOICES = ['🎉', '📷', '🏀', '🎤', '📚', '🚴', '🖌️', '🤖', '🌃', '🎮', '👤', '⛰️', '🎓', '🍜', '🎨', '🏃'];
 
-  function createFormHtml(mode) {
-    const isAdmin = mode === 'admin';
+  function createFormHtml() {
     // 校验失败后用上次填过的值回填，避免用户白填一遍
     const d = state.formDraft || {};
     const v = (k, def) => (d[k] !== undefined && d[k] !== '' ? d[k] : def);
     return '' +
     '<div class="page-head">' +
-      '<h2>' + (isAdmin ? '发布活动' : '创建活动') + '</h2>' +
-      '<p>' + (isAdmin
-        ? '管理员创建的活动跳过审核，保存后直接进入「已发布」状态'
-        : '社团创建的活动需提交校级管理员审核，通过后才会出现在活动广场') +
-      '</p>' +
+      '<h2>发布活动</h2>' +
+      '<p>创建后<b>直接发布</b>，学生立刻可见。可以勾选「需要审核报名」，由你逐人确认。</p>' +
     '</div>' +
     (state.formError ? '<div class="err-box">⚠️ ' + esc(state.formError) + '　<span class="small">（已保留你填写的内容）</span></div>' : '') +
     '<div class="card card-pad" style="max-width:820px">' +
@@ -1277,12 +1512,22 @@
         '</div>' +
       '</div>' +
       '<div class="divider"></div>' +
+      '<h3 style="margin:0 0 10px;font-size:14px">报名方式</h3>' +
+      '<div class="check-field" style="margin-bottom:12px">' +
+        '<input type="checkbox" id="f-review"' + (state.formDraft && state.formDraft.review ? ' checked' : '') + '>' +
+        '<label for="f-review" style="font-size:13px">需要审核报名' +
+          '<div class="hint" style="margin-top:2px">学生报名先进入「待审核」，由你逐人确认。<b>通过不等于一定参加</b>：通过时还有余位才转「正式」，没有余位排入候补。</div>' +
+        '</label>' +
+      '</div>' +
+      '<div class="field full" style="margin-bottom:6px">' +
+        '<label>参加资格说明</label>' +
+        '<textarea id="f-qualification" style="min-height:56px" placeholder="例如：面向全体在校学生；需自备相机或可拍照的手机。勾选「需要审核」时必填。">' + esc(v('qualification', '')) + '</textarea>' +
+      '</div>' +
+      '<div class="divider"></div>' +
       '<div class="row">' +
         '<button class="btn" data-act="save-draft">存为草稿</button>' +
-        '<button class="btn primary" data-act="' + (isAdmin ? 'publish-direct' : 'submit-audit-new') + '">' +
-          (isAdmin ? '直接发布' : '提交审核') +
-        '</button>' +
-        '<span class="small faint">提交后可随时在「我的活动」中继续修改</span>' +
+        '<button class="btn primary" data-act="publish-new">发布活动</button>' +
+        '<span class="small faint">发布后学生立即可以看到；时间地点有变化时可直接改（本 Demo 未做编辑页）</span>' +
       '</div>' +
     '</div>';
   }
@@ -1297,7 +1542,9 @@
       end: (document.getElementById('f-end') || {}).value || '',
       deadline: (document.getElementById('f-deadline') || {}).value || '',
       capacity: (document.getElementById('f-capacity') || {}).value || '',
-      location: (document.getElementById('f-location') || {}).value || ''
+      location: (document.getElementById('f-location') || {}).value || '',
+      review: !!(document.getElementById('f-review') || {}).checked,
+      qualification: (document.getElementById('f-qualification') || {}).value || ''
     };
     const capacity = Number(raw.capacity);
 
@@ -1309,6 +1556,8 @@
     if (new Date(raw.end) <= new Date(raw.start)) return { error: '结束时间必须晚于开始时间', raw: raw };
     if (new Date(raw.deadline) > new Date(raw.start)) return { error: '报名截止时间不能晚于活动开始时间', raw: raw };
     if (new Date(raw.end) <= new Date()) return { error: '结束时间必须晚于当前时间', raw: raw };
+    // 勾了「需要审核」却没写资格说明：审的就是资格，学生也要先看到它
+    if (raw.review && !raw.qualification.trim()) return { error: '勾选「需要审核」时，请填写参加资格说明', raw: raw };
 
     return {
       raw: raw,
@@ -1321,43 +1570,96 @@
         endTime: iso(new Date(raw.end)),
         enrollDeadline: iso(new Date(raw.deadline)),
         capacity: capacity,
-        location: raw.location.trim()
+        location: raw.location.trim(),
+        requiresReview: raw.review,
+        qualification: raw.qualification.trim()
       }
     };
   }
 
+  function createActivity(targetStatus) {
+    const res = readForm();
+    if (res.error) {
+      // 保留用户填过的内容，只提示错在哪 —— 不要让人白填一遍
+      state.formError = res.error;
+      state.formDraft = res.raw;
+      render();
+      toast('请检查表单：' + res.error, 'err');
+      return;
+    }
+    state.formError = '';
+    state.formDraft = null;
+    const d = res.data;
+    const nextId = Math.max.apply(null, state.activities.map((a) => a.id)) + 1;
+    const act = {
+      id: nextId,
+      title: d.title,
+      emoji: d.emoji,
+      categoryId: d.categoryId,
+      organizerId: state.user.id,
+      description: d.description || '（暂未填写活动简介）',
+      startTime: d.startTime,
+      endTime: d.endTime,
+      enrollDeadline: d.enrollDeadline,
+      location: d.location,
+      capacity: d.capacity,
+      requiresReview: d.requiresReview,
+      qualification: d.qualification || null,
+      status: targetStatus,
+      checkInCode: null,
+      seedEnrolled: 0,
+      seedChecked: 0,
+      createdAt: iso(new Date())
+    };
+    state.activities.unshift(act);
+
+    if (targetStatus === 'PUBLISHED') {
+      logAudit(nextId, 'PUBLISH');
+      toast('已发布，学生端立即可见' + (d.requiresReview ? '（需审核报名）' : ''), 'ok');
+    } else {
+      toast('已存为草稿', 'ok');
+    }
+    state.page = 'teacher-activities';
+    render();
+  }
+
   /* =========================================================
-     13. 社团 —— 报名与签到
+     13. 教师 —— 报名与签到（三段名单）
      ========================================================= */
   function rosterPageHtml() {
     const mine = state.activities.filter((a) => isMineAct(a));
     const usable = mine.filter((a) =>
-      ['PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'].indexOf(a.status) !== -1
+      ['PUBLISHED', 'ONGOING', 'FINISHED', 'OFFLINE', 'CANCELED'].indexOf(a.status) !== -1
     );
     if (!usable.length) {
       return '<div class="page-head"><h2>报名与签到</h2></div>' +
         '<div class="card"><div class="empty"><div class="ei">✅</div>还没有已发布的活动<br>' +
-        '<span class="small">活动通过审核后，这里会出现报名名单与签到入口</span></div></div>';
+        '<span class="small">发布活动后，这里会出现报名名单与签到入口</span></div></div>';
     }
     if (!state.rosterId || !usable.some((a) => a.id === state.rosterId)) {
       state.rosterId = usable[0].id;
     }
     const a = getAct(state.rosterId);
-    const rows = rosterOf(a.id);
-    const checked = rows.filter((r) => r.checkInAt).length;
-    const rate = rows.length ? Math.round((checked / rows.length) * 1000) / 10 : 0;
-    const canCheck = a.status === 'ONGOING' || a.status === 'FINISHED';
+    const s = statsOf(a.id);
+    const pending = pendingOf(a.id);
+    const waitlist = waitlistOf(a.id);
+    const confirmed = ofActivity(a.id)
+      .filter((e) => e.status === 'CONFIRMED')
+      .sort((x, y) => (y.isMe - x.isMe) || (x.id - y.id));  // 「我」排最前，方便对照
+    const canCheck = a.status === 'ONGOING';
 
     return '' +
     '<div class="page-head">' +
       '<h2>报名与签到</h2>' +
       '<p>' + (canCheck
         ? '点击名单中的按钮即可手动核验签到，统计数字会实时更新'
-        : '活动尚未开始，签到通道未开放；此时只能查看名单') +
+        : a.status === 'PUBLISHED'
+          ? '活动尚未开始：可审核报名申请；开启签到后进入「进行中」'
+          : '当前状态（' + STATUS[a.status].label + '）只能查看名单') +
       '</p>' +
     '</div>' +
     '<div class="filters">' +
-      '<select class="sel" data-act="roster-pick" style="min-width:240px">' +
+      '<select class="sel" data-act="roster-pick" style="min-width:280px">' +
         usable.map((x) =>
           '<option value="' + x.id + '"' + (x.id === state.rosterId ? ' selected' : '') + '>' +
             STATUS[x.status].label + ' · ' + esc(x.title) +
@@ -1365,15 +1667,18 @@
         ).join('') +
       '</select>' +
       '<span class="spacer"></span>' +
-      '<button class="btn" data-act="export" data-id="' + a.id + '">⬇ 导出 CSV 名单</button>' +
+      '<button class="btn" data-act="export" data-id="' + a.id + '">⬇ 导出名单 CSV</button>' +
     '</div>' +
+
+    // 人数视图（FR-3.2）：上限 / 正式 / 候补 / 余位
     '<div class="stat-grid">' +
-      '<div class="stat"><div class="sl">报名人数</div><div class="sv">' + rows.length + '</div><div class="sd">上限 ' + a.capacity + ' 人</div></div>' +
-      '<div class="stat"><div class="sl">已签到</div><div class="sv" style="color:var(--ok)">' + checked + '</div><div class="sd">组织者核验</div></div>' +
-      '<div class="stat"><div class="sl">签到率</div><div class="sv">' + rate + '%</div><div class="sd">已签到 ÷ 报名</div></div>' +
-      '<div class="stat"><div class="sl">未签到</div><div class="sv" style="color:var(--danger)">' + (rows.length - checked) + '</div><div class="sd">含缺席与未开始</div></div>' +
+      '<div class="stat"><div class="sl">人数上限</div><div class="sv">' + a.capacity + '</div><div class="sd">正式名额的封顶</div></div>' +
+      '<div class="stat"><div class="sl">正式人数</div><div class="sv">' + s.enrolled + '</div><div class="sd">已占名额</div></div>' +
+      '<div class="stat"><div class="sl">候补人数</div><div class="sv" style="color:var(--warn)">' + s.waitlisted + '</div><div class="sd">不占名额，排队等位</div></div>' +
+      '<div class="stat"><div class="sl">剩余名额</div><div class="sv">' + s.remaining + '</div><div class="sd">空出即自动递补</div></div>' +
     '</div>' +
-    (a.checkInCode
+
+    (a.checkInCode && a.status === 'ONGOING'
       ? '<div class="card card-pad" style="margin-bottom:16px">' +
           '<div class="row">' +
             '<div><div class="small muted">学生签到码（6 位数字）</div>' +
@@ -1384,46 +1689,113 @@
             '</div>' +
           '</div>' +
         '</div>'
+      : a.status === 'PUBLISHED'
+        ? '<div class="card card-pad" style="margin-bottom:16px">' +
+            '<div class="row">' +
+              '<div class="small muted">活动还没开始。开启签到后活动会进入「进行中」，同时关闭报名与取消通道。</div>' +
+              '<span class="spacer"></span>' +
+              '<button class="btn sm primary" data-act="open-checkin" data-id="' + a.id + '">开启签到</button>' +
+            '</div>' +
+          '</div>'
+        : '') +
+
+    // 待审核申请（仅"需审核"的活动会出现）
+    ((pending.length || a.requiresReview)
+      ? '<div class="card card-pad" style="margin-bottom:16px">' +
+          '<h3 style="margin:0 0 6px;font-size:14px">待审核申请（' + pending.length + '）' +
+            (a.qualification ? '<span class="small fw-normal muted" style="margin-left:8px">资格：' + esc(a.qualification) + '</span>' : '') +
+          '</h3>' +
+          (pending.length
+            ? '<div class="small muted" style="margin-bottom:10px">通过的是<b>资格</b>，不是名额：通过时还有余位才转「正式」，没有余位会自动排进候补队列。</div>' +
+              '<div class="tbl-wrap"><table class="tb">' +
+                '<thead><tr><th style="width:52px">#</th><th>学号</th><th>姓名</th><th>申请时间</th><th style="text-align:right">操作</th></tr></thead>' +
+                '<tbody>' +
+                pending.map((e, i) =>
+                  '<tr>' +
+                    '<td class="faint">' + (i + 1) + '</td>' +
+                    '<td class="muted small">' + esc(e.studentNo) + '</td>' +
+                    '<td><b>' + esc(e.name) + '</b>' + (e.isMe ? ' <span class="badge st-published">学生演示账号</span>' : '') + '</td>' +
+                    '<td class="muted small">' + fmtShort(e.enrolledAt) + '</td>' +
+                    '<td style="text-align:right">' +
+                      '<button class="btn sm primary" data-act="approve-enroll" data-name="' + esc(e.name) + '" data-id="' + e.id + '">通过</button> ' +
+                      '<button class="btn sm danger" data-act="reject-enroll" data-name="' + esc(e.name) + '" data-id="' + e.id + '">拒绝</button>' +
+                    '</td>' +
+                  '</tr>'
+                ).join('') +
+                '</tbody>' +
+              '</table></div>'
+            : '<div class="small faint">没有等待处理的申请。</div>') +
+        '</div>'
       : '') +
-    '<div class="card tbl-wrap">' +
-      '<table class="tb">' +
+
+    // 正式名单
+    '<div class="card card-pad" style="margin-bottom:16px">' +
+      '<div class="row" style="margin-bottom:10px">' +
+        '<h3 style="margin:0;font-size:14px">正式名单（' + confirmed.length + ' 人）</h3>' +
+        '<span class="spacer"></span>' +
+        (canCheck ? '<span class="small muted">点击按钮核验 / 撤销签到</span>' : '<span class="small faint">仅「进行中」可核验签到</span>') +
+      '</div>' +
+      '<div class="tbl-wrap"><table class="tb">' +
         '<thead><tr>' +
           '<th style="width:52px">#</th><th>学号</th><th>姓名</th>' +
           '<th>报名时间</th><th>签到状态</th><th style="text-align:right">操作</th>' +
         '</tr></thead>' +
         '<tbody>' +
-        (rows.length === 0
-          ? '<tr><td colspan="6"><div class="empty" style="padding:32px">还没有人报名</div></td></tr>'
-          : rows.slice(0, 60).map((r, i) =>
+        (confirmed.length === 0
+          ? '<tr><td colspan="6"><div class="empty" style="padding:26px">还没有正式报名的人</div></td></tr>'
+          : confirmed.slice(0, 60).map((e, i) =>
             '<tr>' +
               '<td class="faint">' + (i + 1) + '</td>' +
-              '<td class="muted small">' + esc(r.studentNo) + '</td>' +
-              '<td><b>' + esc(r.name) + '</b>' + (r.isMe ? ' <span class="badge st-published">我</span>' : '') + '</td>' +
-              '<td class="muted small">' + fmtShort(r.enrolledAt) + '</td>' +
-              '<td>' + (r.checkInAt
-                ? '<span class="badge st-ongoing">已签到</span> <span class="small faint">' + fmtShort(r.checkInAt) + '</span>'
+              '<td class="muted small">' + esc(e.studentNo) + '</td>' +
+              '<td><b>' + esc(e.name) + '</b>' + (e.isMe ? ' <span class="badge st-published">我</span>' : '') + '</td>' +
+              '<td class="muted small">' + fmtShort(e.enrolledAt) + '</td>' +
+              '<td>' + (e.checkInAt
+                ? '<span class="badge st-ongoing">已签到</span> <span class="small faint">' + fmtShort(e.checkInAt) + '</span>'
                 : '<span class="badge st-draft">未签到</span>') + '</td>' +
               '<td style="text-align:right">' +
                 (canCheck
-                  ? '<button class="btn sm ' + (r.checkInAt ? 'danger' : 'primary') + '" data-act="toggle-checkin" data-id="' + a.id + '" data-key="' + r.key + '">' +
-                    (r.checkInAt ? '撤销签到' : '标记已签到') + '</button>'
+                  ? '<button class="btn sm ' + (e.checkInAt ? 'danger' : 'primary') + '" data-act="toggle-checkin" data-id="' + e.id + '">' +
+                    (e.checkInAt ? '撤销签到' : '标记已签到') + '</button>'
                   : '<span class="faint small">—</span>') +
               '</td>' +
             '</tr>'
           ).join('')) +
         '</tbody>' +
       '</table>' +
-      (rows.length > 60
+      (confirmed.length > 60
         ? '<div class="small faint" style="padding:11px 14px;border-top:1px solid var(--border)">' +
-            'Demo 仅展示前 60 条，共 ' + rows.length + ' 条记录</div>'
+            'Demo 仅展示前 60 条，共 ' + confirmed.length + ' 条记录</div>'
         : '') +
+      '</div>' +
+    '</div>' +
+
+    // 候补队列（按进入候补的时间先到先得；名额空出时队首自动转正式）
+    '<div class="card card-pad">' +
+      '<h3 style="margin:0 0 6px;font-size:14px">候补队列（' + waitlist.length + ' 人）</h3>' +
+      (waitlist.length
+        ? '<div class="small muted" style="margin-bottom:10px">顺序 = 进入候补的时间先后（先到先得）。名额空出时<b>队首自动转正式</b>，' +
+          '队列里其他人依次前移；系统不提供任何人工调整顺序的入口。</div>' +
+          '<div class="tbl-wrap"><table class="tb">' +
+            '<thead><tr><th style="width:72px">排位</th><th>学号</th><th>姓名</th><th>进入候补时间</th></tr></thead>' +
+            '<tbody>' +
+            waitlist.map((e, i) =>
+              '<tr>' +
+                '<td><span class="badge st-waitlist">第 ' + (i + 1) + ' 位</span></td>' +
+                '<td class="muted small">' + esc(e.studentNo) + '</td>' +
+                '<td><b>' + esc(e.name) + '</b>' + (e.isMe ? ' <span class="badge st-published">我</span>' : '') + '</td>' +
+                '<td class="muted small">' + fmtShort(e.waitlistedAt) + '</td>' +
+              '</tr>'
+            ).join('') +
+            '</tbody>' +
+          '</table></div>'
+        : '<div class="small faint">候补队列是空的。</div>') +
     '</div>';
   }
 
   /* =========================================================
-     14. 社团 —— 数据统计
+     14. 教师 —— 数据统计
      ========================================================= */
-  function clubStatsHtml() {
+  function teacherStatsHtml() {
     const mine = state.activities
       .filter((a) => isMineAct(a))
       .filter((a) => ['PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'].indexOf(a.status) !== -1);
@@ -1435,22 +1807,25 @@
     const all = mine.map((a) => ({ a: a, s: statsOf(a.id) }));
     const totalEnroll = all.reduce((n, x) => n + x.s.enrolled, 0);
     const totalCheck = all.reduce((n, x) => n + x.s.checked, 0);
+    const totalWait = all.reduce((n, x) => n + x.s.waitlisted, 0);
+    const totalPending = all.reduce((n, x) => n + x.s.pending, 0);
     const overallRate = totalEnroll ? Math.round((totalCheck / totalEnroll) * 1000) / 10 : 0;
 
     return '' +
     '<div class="page-head">' +
       '<h2>数据统计</h2>' +
-      '<p>' + esc(state.user.clubName || state.user.name) + ' 的活动报名与到场情况</p>' +
+      '<p>' + esc(state.user.org || state.user.name) + ' 的活动报名与到场情况</p>' +
     '</div>' +
     '<div class="stat-grid">' +
       '<div class="stat"><div class="sl">活动总数</div><div class="sv">' + mine.length + '</div><div class="sd">已发布及之后的状态</div></div>' +
-      '<div class="stat"><div class="sl">累计报名</div><div class="sv">' + totalEnroll + '</div><div class="sd">人次</div></div>' +
-      '<div class="stat"><div class="sl">累计到场</div><div class="sv" style="color:var(--ok)">' + totalCheck + '</div><div class="sd">人次</div></div>' +
-      '<div class="stat"><div class="sl">整体签到率</div><div class="sv">' + overallRate + '%</div><div class="sd">到场 ÷ 报名</div></div>' +
+      '<div class="stat"><div class="sl">累计正式报名</div><div class="sv">' + totalEnroll + '</div><div class="sd">人次</div></div>' +
+      '<div class="stat"><div class="sl">候补中</div><div class="sv" style="color:var(--warn)">' + totalWait + '</div><div class="sd">排队等位</div></div>' +
+      '<div class="stat"><div class="sl">待审核申请</div><div class="sv" style="color:var(--primary-dark)">' + totalPending + '</div><div class="sd">等待处理</div></div>' +
+      '<div class="stat"><div class="sl">整体签到率</div><div class="sv">' + overallRate + '%</div><div class="sd">到场 ÷ 正式</div></div>' +
     '</div>' +
     '<div class="card tbl-wrap" style="margin-bottom:16px">' +
       '<table class="tb">' +
-        '<thead><tr><th>活动</th><th>状态</th><th>时间</th><th>报名</th><th>实到</th><th>签到率</th><th>上座率</th></tr></thead>' +
+        '<thead><tr><th>活动</th><th>状态</th><th>时间</th><th>正式 / 上限</th><th>候补</th><th>实到</th><th>签到率</th></tr></thead>' +
         '<tbody>' +
         all.map((x) =>
           '<tr>' +
@@ -1458,17 +1833,17 @@
             '<td>' + badge(x.a.status) + '</td>' +
             '<td class="muted small">' + fmtShort(x.a.startTime) + '</td>' +
             '<td>' + x.s.enrolled + ' / ' + x.a.capacity + '</td>' +
+            '<td class="muted">' + x.s.waitlisted + '</td>' +
             '<td>' + x.s.checked + '</td>' +
             '<td><b>' + x.s.rate + '%</b></td>' +
-            '<td class="muted">' + (x.a.capacity ? Math.round((x.s.enrolled / x.a.capacity) * 1000) / 10 : 0) + '%</td>' +
           '</tr>'
         ).join('') +
         '</tbody>' +
       '</table>' +
     '</div>' +
     '<div class="callout">' +
-      '<b>签到率</b>衡量的是「报名的人来了多少」，反映活动的实际吸引力与提醒是否到位；' +
-      '<b>上座率</b>衡量的是「名额用掉了多少」，反映宣传是否触达足够的人。两个指标一起看才有意义。' +
+      '<b>签到率</b>衡量的是「正式报名的人来了多少」；<b>上座率</b>衡量的是「名额用掉了多少」。' +
+      'V2.0 里还要看两个新数字：<b>候补</b>（队列里还压着多少人）与<b>待审核</b>（等你处理的申请）。' +
     '</div>' +
     '<div style="margin-top:14px">' +
       '<button class="btn" data-act="export-stats">⬇ 导出统计汇总 CSV</button>' +
@@ -1476,76 +1851,11 @@
   }
 
   /* =========================================================
-     15. 管理员 —— 审核中心
+     15. 管理员 —— 活动监督
      ========================================================= */
-  function adminAuditHtml() {
-    const pending = state.activities.filter((a) => a.status === 'PENDING');
-    const recent = state.auditLogs.slice(0, 8);
-    const ACTION_LABEL = { SUBMIT: '提交审核', APPROVE: '审核通过', REJECT: '审核驳回', CANCEL: '取消活动' };
+  const OFFLINE_ACTION_LABEL = { PUBLISH: '发布活动', OFFLINE: '下线活动', RESTORE: '恢复展示', CANCEL: '取消活动' };
 
-    return '' +
-    '<div class="page-head">' +
-      '<h2>审核中心</h2>' +
-      '<p>社团提交的活动需在此审核；管理员自己创建的活动无需审核，可直接发布</p>' +
-    '</div>' +
-    (pending.length
-      ? '<div class="callout" style="margin-bottom:16px">当前有 <b>' + pending.length + '</b> 个活动等待审核</div>'
-      : '<div class="callout" style="margin-bottom:16px">🎉 所有活动都已处理完毕，暂无待审核项</div>') +
-    (pending.map((a) => {
-      const sub = SUBMITTERS[a.id] || { name: orgName(a.organizerId), at: a.createdAt };
-      return '' +
-      '<div class="card" style="margin-bottom:13px">' +
-        '<div style="padding:17px 18px">' +
-          '<div style="display:flex;gap:14px;align-items:flex-start">' +
-            '<div class="acover t-' + toneOf(a.categoryId) + '" style="width:58px;height:58px;font-size:24px;border-radius:10px;flex:none">' + a.emoji + '</div>' +
-            '<div style="flex:1;min-width:0">' +
-              '<div class="row" style="margin-bottom:3px"><b style="font-size:15px">' + esc(a.title) + '</b>' + badge(a.status) + '</div>' +
-              '<div class="small muted">' +
-                '提交人：<b>' + esc(sub.name) + '</b>　提交时间：' + fmt(sub.at) + '　分类：' + esc(catName(a.categoryId)) +
-              '</div>' +
-              '<div class="small muted">' +
-                '🕐 ' + fmt(a.startTime) + ' – ' + fmt(a.endTime) + '　📍 ' + esc(a.location) +
-                '　👥 上限 ' + a.capacity + ' 人　⏳ 报名截止 ' + fmt(a.enrollDeadline) +
-              '</div>' +
-              '<div class="small" style="margin-top:9px;color:#475467;background:var(--panel-2);padding:10px 12px;border-radius:8px;line-height:1.7">' +
-                (a.description ? nl2br(a.description) : '<span class="faint">（未填写简介）</span>') +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-          '<div class="divider"></div>' +
-          '<div class="row">' +
-            '<button class="btn primary" data-act="approve" data-id="' + a.id + '">✓ 审核通过并发布</button>' +
-            '<button class="btn danger" data-act="reject" data-id="' + a.id + '">✕ 驳回</button>' +
-            '<span class="spacer"></span>' +
-            '<span class="small faint">驳回必须填写原因，原因会展示给创建者</span>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-    }).join('') || '') +
-    '<div class="card card-pad" style="margin-top:20px">' +
-      '<h3 style="margin:0 0 12px;font-size:15px">审核日志</h3>' +
-      '<div class="tbl-wrap"><table class="tb">' +
-        '<thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>活动</th><th>说明</th></tr></thead><tbody>' +
-        recent.map((l) => {
-          const a = getAct(l.activityId);
-          return '<tr>' +
-            '<td class="muted small">' + fmtShort(l.at) + '</td>' +
-            '<td>' + esc(l.operator) + '</td>' +
-            '<td><span class="badge ' + (l.action === 'APPROVE' ? 'st-ongoing' : l.action === 'REJECT' ? 'st-rejected' : 'st-draft') + '">' +
-              ACTION_LABEL[l.action] + '</span></td>' +
-            '<td class="muted">' + (a ? esc(a.title) : '已删除') + '</td>' +
-            '<td class="muted small">' + (l.reason ? esc(l.reason) : '—') + '</td>' +
-          '</tr>';
-        }).join('') +
-        '</tbody></table></div>' +
-      '<div class="callout" style="margin-top:14px">审核日志<b>只追加、不修改</b>，用于事后追溯。活动后来被改了什么、谁批的，都留痕。</div>' +
-    '</div>';
-  }
-
-  /* =========================================================
-     16. 管理员 —— 全部活动
-     ========================================================= */
-  function adminActivitiesHtml() {
+  function adminSupervisionHtml() {
     const f = state.filter;
     const list = state.activities.filter((a) => !f.status || a.status === f.status);
     const counts = {};
@@ -1553,8 +1863,9 @@
 
     return '' +
     '<div class="page-head">' +
-      '<h2>全部活动</h2>' +
-      '<p>共 ' + state.activities.length + ' 个活动 · 可按状态筛选</p>' +
+      '<h2>活动监督</h2>' +
+      '<p>查看平台全部活动，对违规或明显错误的活动做状态处理（下线 / 恢复展示）。' +
+      '<b>不代替教师编辑活动内容，也不介入具体报名。</b></p>' +
     '</div>' +
     '<div class="chips">' +
       '<span class="chip ' + (!f.status ? 'on' : '') + '" data-act="filter-status-chip" data-s="">全部 <b>' + state.activities.length + '</b></span>' +
@@ -1565,61 +1876,93 @@
     '</div>' +
     '<div class="card tbl-wrap">' +
       '<table class="tb">' +
-        '<thead><tr><th>活动</th><th>主办</th><th>状态</th><th>时间</th><th>报名</th><th>签到率</th><th style="text-align:right">操作</th></tr></thead>' +
+        '<thead><tr><th>活动</th><th>组织教师</th><th>状态</th><th>时间</th><th>正式 / 上限</th><th style="text-align:right">操作</th></tr></thead>' +
         '<tbody>' +
         (list.length === 0
-          ? '<tr><td colspan="7"><div class="empty" style="padding:32px">该状态下暂无活动</div></td></tr>'
-          : list.map((a) => {
-            const s = statsOf(a.id);
-            const actionable = ['PUBLISHED', 'ONGOING'].indexOf(a.status) !== -1;
-            return '<tr>' +
-              '<td><b>' + a.emoji + ' ' + esc(a.title) + '</b></td>' +
+          ? '<tr><td colspan="6"><div class="empty" style="padding:32px">该状态下暂无活动</div></td></tr>'
+          : list.map((a) =>
+            '<tr>' +
+              '<td><b>' + a.emoji + ' ' + esc(a.title) + '</b>' +
+                (a.status === 'OFFLINE'
+                  ? '<div class="small" style="color:var(--danger)">下线处理：' + esc(a.offlineReason || '（未填写原因）') +
+                    '<span class="faint">（' + esc(a.offlineBy || '') + ' · ' + fmtShort(a.offlineAt) + '）</span></div>'
+                  : '') +
+              '</td>' +
               '<td class="muted small">' + esc(orgName(a.organizerId)) + '</td>' +
               '<td>' + badge(a.status) + '</td>' +
               '<td class="muted small">' + fmtShort(a.startTime) + '</td>' +
-              '<td>' + a.enrolledCount + ' / ' + a.capacity + '</td>' +
-              '<td>' + (s.enrolled ? s.rate + '%' : '<span class="faint">—</span>') + '</td>' +
+              '<td>' + confirmedOf(a.id) + ' / ' + a.capacity + '</td>' +
               '<td style="text-align:right">' +
                 '<button class="btn sm" data-act="detail" data-id="' + a.id + '">查看</button> ' +
-                (actionable ? '<button class="btn sm danger" data-act="admin-cancel" data-id="' + a.id + '">强制取消</button>' : '') +
+                (ADMIN_OFFINABLE.indexOf(a.status) !== -1
+                  ? '<button class="btn sm danger" data-act="admin-offline" data-id="' + a.id + '">下线</button>'
+                  : a.status === 'OFFLINE'
+                    ? '<button class="btn sm" data-act="admin-restore" data-id="' + a.id + '">恢复</button>'
+                    : '<span class="faint small">—</span>') +
               '</td>' +
-            '</tr>';
-          }).join('')) +
+            '</tr>'
+          ).join('')) +
         '</tbody>' +
       '</table>' +
     '</div>' +
+    '<div class="card card-pad" style="margin-top:20px">' +
+      '<h3 style="margin:0 0 12px;font-size:15px">最近处理记录</h3>' +
+      '<div class="tbl-wrap"><table class="tb">' +
+        '<thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>活动</th><th>说明</th></tr></thead><tbody>' +
+        state.auditLogs.slice(0, 8).map((l) => {
+          const a = getAct(l.activityId);
+          return '<tr>' +
+            '<td class="muted small">' + fmtShort(l.at) + '</td>' +
+            '<td>' + esc(l.operator) + '</td>' +
+            '<td><span class="badge ' + (l.action === 'RESTORE' ? 'st-ongoing' : l.action === 'OFFLINE' ? 'st-offline' : 'st-draft') + '">' +
+              OFFLINE_ACTION_LABEL[l.action] + '</span></td>' +
+            '<td class="muted">' + (a ? esc(a.title) : '已删除') + '</td>' +
+            '<td class="muted small">' + (l.reason ? esc(l.reason) : '—') + '</td>' +
+          '</tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+      '<div class="callout" style="margin-top:14px">处理记录<b>只追加、不修改</b>：谁在什么时候把哪场活动下线了、为什么，教师端都看得到（即"处理标记"）。</div>' +
+    '</div>' +
     '<div class="callout warn" style="margin-top:16px">' +
-      '<b>权限提醒：</b>管理员能操作全部活动，但「能操作」不等于「不受限制」。' +
-      '归属权校验必须在服务端完成——前端把按钮藏起来，改一个请求就能绕过去。' +
+      '<b>权限边界：</b>管理员对活动的工具只有「下线 / 恢复」——编辑内容、审核报名、动名单都是教师自己的职责（BR-11）。' +
     '</div>';
   }
 
   /* =========================================================
-     17. 管理员 —— 用户与分类
+     16. 管理员 —— 用户与分类
      ========================================================= */
   function adminMiscHtml() {
     return '' +
     '<div class="page-head">' +
       '<h2>用户与分类</h2>' +
-      '<p>角色调整与活动分类维护</p>' +
+      '<p>账号状态（停用 / 恢复）、角色与活动分类维护</p>' +
     '</div>' +
     '<div class="card tbl-wrap" style="margin-bottom:20px">' +
       '<table class="tb">' +
-        '<thead><tr><th>学号 / 工号</th><th>姓名</th><th>角色</th><th>邮箱</th><th>状态</th></tr></thead>' +
+        '<thead><tr><th>学号 / 工号</th><th>姓名</th><th>角色</th><th>所属组织</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>' +
         '<tbody>' +
         ALL_USERS.map((u) =>
           '<tr>' +
             '<td class="muted small">' + esc(u.studentNo) + '</td>' +
-            '<td><b>' + esc(u.name) + '</b>' + (u.clubName ? ' <span class="small faint">' + esc(u.clubName) + '</span>' : '') + '</td>' +
+            '<td><b>' + esc(u.name) + '</b></td>' +
             '<td>' + roleBadge(u.role) + '</td>' +
-            '<td class="muted small">' + esc(u.email) + '</td>' +
+            '<td class="muted small">' + esc(u.org || '—') + '</td>' +
             '<td>' + (u.status === 1
               ? '<span class="badge st-ongoing">正常</span>'
               : '<span class="badge st-canceled">已停用</span>') + '</td>' +
+            '<td style="text-align:right">' +
+              (u.role !== 'ADMIN'
+                ? '<button class="btn sm ' + (u.status === 1 ? 'danger' : '') + '" data-act="toggle-user" data-no="' + esc(u.studentNo) + '">' +
+                  (u.status === 1 ? '停用' : '恢复') + '</button>'
+                : '<span class="faint small">—</span>') +
+            '</td>' +
           '</tr>'
         ).join('') +
         '</tbody>' +
       '</table>' +
+    '</div>' +
+    '<div class="callout" style="margin-bottom:20px">' +
+      '停用账号后该用户<b>无法登录</b>，但已有的报名记录不受影响（DEC-6）；问题处理完恢复为「正常」即可。' +
     '</div>' +
     '<div class="card card-pad" style="max-width:520px">' +
       '<h3 style="margin:0 0 12px;font-size:15px">活动分类</h3>' +
@@ -1634,21 +1977,21 @@
   }
 
   /* =========================================================
-     18. 渲染入口
+     17. 渲染入口
      ========================================================= */
   function render() {
     document.getElementById('app').innerHTML = state.user ? shellHtml() : loginHtml();
   }
 
   /* =========================================================
-     19. 业务动作
+     18. 业务动作
      ========================================================= */
   const ACTIONS = {
     login: function (el) {
       state.user = LOGIN_USERS[el.getAttribute('data-role')];
       state.page = state.user.role === 'STUDENT' ? 'plaza'
-                 : state.user.role === 'CLUB' ? 'club-activities'
-                 : 'admin-audit';
+                 : state.user.role === 'TEACHER' ? 'teacher-activities'
+                 : 'admin-supervision';
       state.filter = { keyword: '', categoryId: '', status: '' };
       state.listPage = 1;
       state.formError = '';
@@ -1672,7 +2015,7 @@
       state.page = el.getAttribute('data-page');
       state.formError = '';
       state.formDraft = null;
-      if (state.page === 'plaza' || state.page === 'admin-activities') {
+      if (state.page === 'plaza' || state.page === 'admin-supervision') {
         state.filter = { keyword: '', categoryId: '', status: '' };
         state.listPage = 1;
       }
@@ -1708,114 +2051,118 @@
       render();
     },
 
+    /* ---------- 学生：报名 / 取消 ---------- */
+
     enroll: function (el) {
       const a = getAct(Number(el.getAttribute('data-id')));
       const reason = enrollBlockReason(a);
       if (reason) { toast(reason, 'err'); return; }
-      if (myEnroll(a.id)) { toast('你已经报名过这个活动了', 'warn'); return; }
 
-      a.enrolledCount += 1;
-      state.myEnrollments.push({ activityId: a.id, at: iso(new Date()), checkInAt: null });
-      invalidateRoster(a.id);
+      let mine = myEnroll(a.id);
+      if (mine && ACTIVE_ENROLL.indexOf(mine.status) !== -1) {
+        toast('你已经报名过这个活动了（当前状态：' + ENROLL[mine.status].label + '）', 'warn');
+        return;
+      }
+
+      const now = iso(new Date());
+      if (!mine) {
+        mine = {
+          id: state.enrollments.length + 1,
+          activityId: a.id,
+          userId: state.user.id,
+          studentNo: state.user.studentNo,
+          name: state.user.name,
+          isMe: true,
+          status: 'CONFIRMED',
+          enrolledAt: now,
+          waitlistedAt: null,
+          reviewedAt: null,
+          reviewedBy: null,
+          canceledAt: null,
+          checkInAt: null
+        };
+        state.enrollments.push(mine);
+      }
+      // 复用旧记录（已取消 / 已拒绝）：时间线整体重置为「这一轮报名」
+      mine.enrolledAt = now;
+      mine.canceledAt = null;
+      mine.reviewedAt = null;
+      mine.reviewedBy = null;
+      mine.checkInAt = null;
+      mine.waitlistedAt = null;
+
+      if (a.requiresReview) {
+        mine.status = 'PENDING';
+        render();
+        toast('报名申请已提交，等待组织教师审核确认。', 'ok');
+        return;
+      }
+      if (confirmedOf(a.id) < a.capacity) {
+        mine.status = 'CONFIRMED';
+        render();
+        toast('报名成功，名额已为你保留。', 'ok');
+        return;
+      }
+      mine.status = 'WAITLISTED';
+      mine.waitlistedAt = now;
       render();
-      toast('报名成功，剩余名额 ' + (a.capacity - a.enrolledCount) + ' 个', 'ok');
+      toast('名额已满，已进入候补队列（当前第 ' + waitlistPosition(mine) + ' 位）。', 'ok');
     },
 
     unenroll: function (el) {
       const id = Number(el.getAttribute('data-id'));
       const a = getAct(id);
-      const block = cancelBlockReason(a);
+      const mine = myEnroll(id);
+      if (!mine || ACTIVE_ENROLL.indexOf(mine.status) === -1) {
+        toast('你还没有报名这个活动', 'err');
+        return;
+      }
+      const block = cancelBlockReason(a, mine);
       if (block) { toast(block, 'err'); return; }
-      const idx = state.myEnrollments.findIndex((m) => m.activityId === id);
-      if (idx === -1) return;
+
+      const label = actionLabelOf(mine.status);
+      const text = mine.status === 'CONFIRMED'
+        ? '「' + a.title + '」的名额将立即释放，候补队列的队首会自动转为正式。'
+        : mine.status === 'WAITLISTED'
+          ? '退出候补后，你后面的候补者会按原顺序自动前移。'
+          : '撤销后如需再参加，要重新提交申请。';
       openModal({
-        title: '确认取消报名？',
-        text: '「' + a.title + '」的名额将立即释放给其他同学。你仍可以在名单锁定前重新报名。',
-        okText: '确认取消报名',
+        title: '确认' + label + '？',
+        text: text,
+        okText: '确认' + label,
         danger: true,
         onOk: function () {
-          state.myEnrollments.splice(idx, 1);
-          a.enrolledCount = Math.max(a.enrolledCount - 1, 0);
-          invalidateRoster(id);
+          const wasConfirmed = mine.status === 'CONFIRMED';
+          mine.status = 'CANCELED';
+          mine.canceledAt = iso(new Date());
+          mine.waitlistedAt = null;
+          const promoted = wasConfirmed ? promoteWaitlist(id) : [];
           render();
-          toast('已取消报名', 'ok');
+          if (promoted.length) {
+            toast('已取消；候补第 1 位「' + promoted[0].name + '」已自动转正式', 'ok');
+          } else {
+            toast('已' + label, 'ok');
+          }
         }
       });
     },
 
-    'toggle-checkin': function (el) {
-      const id = Number(el.getAttribute('data-id'));
-      const key = el.getAttribute('data-key');
-      const rows = rosterOf(id);
-      const row = rows.find((r) => r.key === key);
-      if (!row) return;
-      if (row.checkInAt) {
-        row.checkInAt = null;
-        toast(row.name + ' 的签到已撤销', 'warn');
-      } else {
-        row.checkInAt = iso(new Date());
-        toast(row.name + ' 已标记为签到', 'ok');
-      }
-      render();
-    },
+    /* ---------- 教师：活动与审核 ---------- */
 
-    export: function (el) {
-      const id = Number(el.getAttribute('data-id'));
-      const a = getAct(id);
-      const rows = rosterOf(id);
-      const data = [['序号', '学号', '姓名', '报名时间', '签到状态', '签到时间']];
-      rows.forEach((r, i) => {
-        data.push([i + 1, r.studentNo, r.name, fmt(r.enrolledAt), r.checkInAt ? '已签到' : '未签到', r.checkInAt ? fmt(r.checkInAt) : '']);
-      });
-      exportCsv(a.title + '-报名名单.csv', data);
-    },
-
-    'export-stats': function () {
-      const mine = state.activities.filter((a) => isMineAct(a))
-        .filter((a) => ['PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'].indexOf(a.status) !== -1);
-      const data = [['活动名称', '状态', '开始时间', '报名人数', '人数上限', '实到人数', '签到率(%)', '上座率(%)']];
-      mine.forEach((a) => {
-        const s = statsOf(a.id);
-        data.push([
-          a.title, STATUS[a.status].label, fmt(a.startTime),
-          s.enrolled, a.capacity, s.checked, s.rate,
-          a.capacity ? Math.round((s.enrolled / a.capacity) * 1000) / 10 : 0
-        ]);
-      });
-      exportCsv('活动统计汇总.csv', data);
-    },
-
-    'roster-pick': function () {},
-
-    'submit-audit': function (el) {
+    'publish-activity': function (el) {
       const a = getAct(Number(el.getAttribute('data-id')));
-      a.status = 'PENDING';
-      logAudit(a.id, 'SUBMIT');
+      a.status = 'PUBLISHED';
+      logAudit(a.id, 'PUBLISH');
       render();
-      toast('已提交审核，等待管理员处理', 'ok');
-    },
-
-    withdraw: function (el) {
-      const a = getAct(Number(el.getAttribute('data-id')));
-      a.status = 'DRAFT';
-      render();
-      toast('已撤回为草稿', 'warn');
-    },
-
-    resubmit: function (el) {
-      const a = getAct(Number(el.getAttribute('data-id')));
-      a.status = 'PENDING';
-      a.rejectReason = null;
-      logAudit(a.id, 'SUBMIT');
-      render();
-      toast('已重新提交审核', 'ok');
+      toast('活动已发布，学生端立即可见', 'ok');
     },
 
     'cancel-activity': function (el) {
       const a = getAct(Number(el.getAttribute('data-id')));
       openModal({
         title: '确认取消活动？',
-        text: '「' + a.title + '」已报名 ' + a.enrolledCount + ' 人。取消后活动将变为「已取消」，学生端只读。',
+        text: '「' + a.title + '」已有 ' + confirmedOf(a.id) + ' 人正式报名、' + waitlistOf(a.id).length + ' 人候补。' +
+              '取消后活动变为「已取消」，学生端只读。',
         okText: '确认取消活动',
         danger: true,
         onOk: function () {
@@ -1827,117 +2174,171 @@
       });
     },
 
-    'admin-cancel': function (el) {
+    'save-draft': function () { createActivity('DRAFT'); },
+    'publish-new': function () { createActivity('PUBLISHED'); },
+
+    'open-checkin': function (el) {
       const a = getAct(Number(el.getAttribute('data-id')));
+      a.status = 'ONGOING';
+      if (!a.checkInCode) a.checkInCode = String(Math.floor(100000 + Math.random() * 900000));
+      render();
+      toast('已开启签到，活动进入「进行中」，报名与取消通道同时关闭', 'ok');
+    },
+
+    'approve-enroll': function (el) {
+      const eid = Number(el.getAttribute('data-id'));
+      const row = state.enrollments.find((x) => x.id === eid);
+      if (!row || row.status !== 'PENDING') { toast('这条申请已经处理过了', 'warn'); return; }
+      const a = getAct(row.activityId);
+      row.reviewedAt = iso(new Date());
+      row.reviewedBy = state.user.id;
+      if (confirmedOf(a.id) < a.capacity) {
+        row.status = 'CONFIRMED';
+        render();
+        toast('已通过，' + row.name + ' 转为正式', 'ok');
+      } else {
+        // 通过 ≠ 一定参加：没有余位只能进候补，队列记录「通过时刻」
+        row.status = 'WAITLISTED';
+        row.waitlistedAt = iso(new Date());
+        render();
+        toast('已通过，但当前没有余位，' + row.name + ' 排进候补队列（第 ' + waitlistPosition(row) + ' 位）', 'warn');
+      }
+    },
+
+    'reject-enroll': function (el) {
+      const eid = Number(el.getAttribute('data-id'));
+      const row = state.enrollments.find((x) => x.id === eid);
+      if (!row || row.status !== 'PENDING') { toast('这条申请已经处理过了', 'warn'); return; }
       openModal({
-        title: '强制取消该活动？',
-        text: '管理员操作会记入审核日志。活动：「' + a.title + '」',
-        okText: '强制取消',
+        title: '拒绝这条申请？',
+        text: '拒绝「' + row.name + '」对活动的报名申请。拒绝是终态：本次不能参加，也不会进入候补。',
+        okText: '确认拒绝',
         danger: true,
         onOk: function () {
-          a.status = 'CANCELED';
-          logAudit(a.id, 'CANCEL', '管理员强制取消');
+          row.status = 'REJECTED';
+          row.reviewedAt = iso(new Date());
+          row.reviewedBy = state.user.id;
           render();
-          toast('已强制取消', 'warn');
+          toast('已拒绝该申请', 'warn');
         }
       });
     },
 
-    approve: function (el) {
-      const a = getAct(Number(el.getAttribute('data-id')));
-      a.status = 'PUBLISHED';
-      logAudit(a.id, 'APPROVE');
+    'toggle-checkin': function (el) {
+      const eid = Number(el.getAttribute('data-id'));
+      const row = state.enrollments.find((x) => x.id === eid);
+      if (!row) return;
+      if (row.checkInAt) {
+        row.checkInAt = null;
+        toast(row.name + ' 的签到已撤销', 'warn');
+      } else {
+        row.checkInAt = iso(new Date());
+        toast(row.name + ' 已标记为签到', 'ok');
+      }
       render();
-      toast('已通过并发布，学生端立即可见', 'ok');
-    },
-
-    reject: function (el) {
-      const a = getAct(Number(el.getAttribute('data-id')));
-      openModal({
-        title: '驳回活动',
-        text: '驳回「' + a.title + '」。请填写原因，创建者会看到这段说明。',
-        input: true,
-        placeholder: '例如：场地与消防演练时间冲突，请改期后重新提交。',
-        okText: '确认驳回',
-        danger: true,
-        onOk: function (reason) {
-          a.status = 'REJECTED';
-          a.rejectReason = reason;
-          logAudit(a.id, 'REJECT', reason);
-          render();
-          toast('已驳回，创建者可修改后重新提交', 'warn');
-        }
-      });
     },
 
     'goto-roster': function (el) {
       state.rosterId = Number(el.getAttribute('data-id'));
-      state.page = 'club-roster';
+      state.page = 'teacher-roster';
       render();
     },
 
     'goto-stats': function () {
-      state.page = 'club-stats';
+      state.page = 'teacher-stats';
       render();
     },
 
-    'save-draft': function () { createActivity('DRAFT'); },
-    'submit-audit-new': function () { createActivity('PENDING'); },
-    'publish-direct': function () { createActivity('PUBLISHED'); }
+    /* ---------- 导出 ---------- */
+
+    export: function (el) {
+      const id = Number(el.getAttribute('data-id'));
+      const a = getAct(id);
+      // 与真系统一致：导出「待审核 / 正式 / 候补」三类有效报名，用「状态」列区分；
+      // 正式在前（要带去现场点名的就是这批人），候补严格按队列顺序。
+      const order = { CONFIRMED: 0, PENDING: 1, WAITLISTED: 2 };
+      const rows = state.enrollments
+        .filter((e) => e.activityId === id && ACTIVE_ENROLL.indexOf(e.status) !== -1)
+        .sort((x, y) => (order[x.status] - order[y.status]) || (x.id - y.id));
+      const data = [['序号', '状态', '学号', '姓名', '报名时间', '签到状态', '签到时间']];
+      rows.forEach((e, i) => {
+        data.push([
+          i + 1, ENROLL[e.status].label, e.studentNo, e.name,
+          fmt(e.enrolledAt),
+          e.checkInAt ? '已签到' : '未签到',
+          e.checkInAt ? fmt(e.checkInAt) : ''
+        ]);
+      });
+      exportCsv(a.title + '-报名名单.csv', data);
+    },
+
+    'export-stats': function () {
+      const mine = state.activities.filter((a) => isMineAct(a))
+        .filter((a) => ['PUBLISHED', 'ONGOING', 'FINISHED', 'CANCELED'].indexOf(a.status) !== -1);
+      const data = [['活动名称', '状态', '开始时间', '正式人数', '人数上限', '候补人数', '实到人数', '签到率(%)', '上座率(%)']];
+      mine.forEach((a) => {
+        const s = statsOf(a.id);
+        data.push([
+          a.title, STATUS[a.status].label, fmt(a.startTime),
+          s.enrolled, a.capacity, s.waitlisted, s.checked, s.rate, s.fill
+        ]);
+      });
+      exportCsv('活动统计汇总.csv', data);
+    },
+
+    /* ---------- 管理员 ---------- */
+
+    'admin-offline': function (el) {
+      const a = getAct(Number(el.getAttribute('data-id')));
+      openModal({
+        title: '下线活动',
+        text: '下线「' + a.title + '」。学生端将不再展示、不能报名；教师端仍可见，并带上处理标记。\n（不删数据、不改内容、不动报名记录）',
+        input: true,
+        allowEmpty: true,
+        placeholder: '下线原因（可选，会展示给组织教师）',
+        okText: '确认下线',
+        danger: true,
+        onOk: function (reason) {
+          a.status = 'OFFLINE';
+          a.offlineReason = reason || '';
+          a.offlineBy = state.user.name;
+          a.offlineAt = iso(new Date());
+          logAudit(a.id, 'OFFLINE', reason);
+          render();
+          toast('活动已下线，学生端不再展示', 'info');
+        }
+      });
+    },
+
+    'admin-restore': function (el) {
+      const a = getAct(Number(el.getAttribute('data-id')));
+      openModal({
+        title: '恢复展示？',
+        text: '恢复「' + a.title + '」的展示。恢复后会按时间重新定位状态（已发布 / 进行中 / 已结束）。',
+        okText: '确认恢复',
+        onOk: function () {
+          a.status = statusByTime(a);
+          logAudit(a.id, 'RESTORE');
+          render();
+          toast('已恢复展示（当前状态：' + STATUS[a.status].label + '）', 'ok');
+        }
+      });
+    },
+
+    'toggle-user': function (el) {
+      const no = el.getAttribute('data-no');
+      const u = ALL_USERS.find((x) => x.studentNo === no);
+      if (!u) return;
+      u.status = u.status === 1 ? 0 : 1;
+      render();
+      toast(u.name + ' 已' + (u.status === 1 ? '恢复' : '停用'), u.status === 1 ? 'ok' : 'warn');
+    },
+
+    'roster-pick': function () {}
   };
 
-  function createActivity(targetStatus) {
-    const res = readForm();
-    if (res.error) {
-      // 保留用户填过的内容，只提示错在哪 —— 不要让人白填一遍
-      state.formError = res.error;
-      state.formDraft = res.raw;
-      render();
-      toast('请检查表单：' + res.error, 'err');
-      return;
-    }
-    state.formError = '';
-    state.formDraft = null;
-    const d = res.data;
-    const nextId = Math.max.apply(null, state.activities.map((a) => a.id)) + 1;
-    const act = {
-      id: nextId,
-      title: d.title,
-      emoji: d.emoji,
-      categoryId: d.categoryId,
-      organizerId: state.user.id,
-      description: d.description || '（暂未填写活动简介）',
-      startTime: d.startTime,
-      endTime: d.endTime,
-      enrollDeadline: d.enrollDeadline,
-      location: d.location,
-      capacity: d.capacity,
-      enrolledCount: 0,
-      status: targetStatus,
-      checkInCode: null,
-      checkedInCount: 0,
-      createdAt: iso(new Date())
-    };
-    state.activities.unshift(act);
-
-    if (targetStatus === 'PENDING') {
-      SUBMITTERS[nextId] = { name: state.user.clubName || state.user.name, at: iso(new Date()) };
-      logAudit(nextId, 'SUBMIT');
-      toast('已提交审核，可切到管理员查看', 'ok');
-    } else if (targetStatus === 'PUBLISHED') {
-      act.checkInCode = String(Math.floor(100000 + Math.random() * 900000));
-      logAudit(nextId, 'APPROVE', '管理员直接发布');
-      toast('已直接发布，学生端立即可见', 'ok');
-    } else {
-      toast('已存为草稿', 'ok');
-    }
-    state.lastSubmittedId = nextId;
-    state.page = state.user.role === 'CLUB' ? 'club-activities' : 'admin-activities';
-    render();
-  }
-
   /* =========================================================
-     20. 事件绑定
+     19. 事件绑定
      ========================================================= */
   document.addEventListener('click', function (e) {
     // 点击遮罩空白处：引导面板直接关闭，普通弹窗也关闭
