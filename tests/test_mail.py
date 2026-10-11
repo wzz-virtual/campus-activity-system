@@ -51,15 +51,15 @@ def recipients_of(app, subject):
 # ---------------------------------------------------------------------------
 
 
-def test_homepage_shows_the_announcement(client, app):
-    """标题下那段说明文字现在来自数据库（公告），空库首次访问自动补默认文案。"""
+def test_homepage_has_no_announcement_by_default(client, app):
+    """公告默认为空（用户要求首页不放说明文字）：不渲染，但公告行存在且只有一行。"""
     html = client.get("/").get_data(as_text=True)
 
-    assert "把校园活动从" in html
-    assert "候补队列" in html
+    assert "把校园活动从" not in html
 
     with app.app_context():
         assert count(Announcement) == 1, "公告行应当被自动创建且只有一行"
+        assert _db.session.get(Announcement, 1).content == ""
 
 
 def test_teacher_and_admin_can_edit_announcement(client, login, csrf_token, teacher, app):
@@ -95,14 +95,50 @@ def test_student_cannot_edit_announcement(client, login, csrf_token, student, ap
         assert _db.session.get(Announcement, 1).content == DEFAULT_ANNOUNCEMENT
 
 
-def test_empty_announcement_is_rejected(client, login, csrf_token, teacher, app):
+def test_empty_announcement_clears_it(client, login, csrf_token, teacher, app):
+    """公告允许清空：留空保存 = 首页不再显示。"""
     login(teacher.student_no)
+    resp = client.post(
+        "/mail/announcement",
+        data={"csrf_token": csrf_token("/mail/"), "content": "临时公告"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
     resp = client.post(
         "/mail/announcement",
         data={"csrf_token": csrf_token("/mail/"), "content": "   "},
         follow_redirects=True,
     )
-    assert "公告内容不能为空" in resp.get_data(as_text=True)
+    assert resp.status_code == 200
+    assert "公告已更新" in resp.get_data(as_text=True)
+
+    with app.app_context():
+        assert _db.session.get(Announcement, 1).content == ""
+
+
+def test_legacy_default_announcement_is_cleared_on_boot(client, app):
+    """老库里「没人改过、仍是旧默认文案」的公告，启动时被清空；教师写的不动。"""
+    from app.mailbox import LEGACY_DEFAULT_ANNOUNCEMENT, normalize_legacy_announcement
+
+    client.get("/")  # 触发公告行的自动创建
+
+    with app.app_context():
+        row = _db.session.get(Announcement, 1)
+        assert row is not None
+        row.content = LEGACY_DEFAULT_ANNOUNCEMENT
+        _db.session.commit()
+
+        assert normalize_legacy_announcement() is True
+        row = _db.session.get(Announcement, 1)
+        assert row.content == ""
+        assert row.updated_by is None and row.updated_at is None
+
+        # 教师 / 管理员自己写过的内容一字不动
+        row.content = "教师自己写的公告"
+        _db.session.commit()
+        assert normalize_legacy_announcement() is False
+        assert _db.session.get(Announcement, 1).content == "教师自己写的公告"
 
 
 # ---------------------------------------------------------------------------

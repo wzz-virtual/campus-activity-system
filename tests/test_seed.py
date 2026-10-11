@@ -365,14 +365,13 @@ def test_seeded_offline_marker_is_visible_on_pages(app, client, login):
 
 
 def test_seed_creates_announcement_and_demo_mails(app, client, login):
-    """V2.0 的演示数据要带上公告与两封示例邮件。"""
+    """V2.0 的演示数据要带上公告行（默认空）与两封示例邮件。"""
     app.test_cli_runner().invoke(args=["seed-demo"])
 
     with app.app_context():
         announcement = _db.session.get(Announcement, 1)
-        assert announcement is not None, "公告行缺失，首页会没有说明文字"
-        assert "把校园活动从" in announcement.content
-        assert announcement.updated_by is not None
+        assert announcement is not None, "公告行缺失，教师将无处编辑公告"
+        assert announcement.content == "", "公告默认不预置文案（用户要求首页不放说明文字）"
 
         messages = _db.session.execute(_db.select(Message)).scalars().all()
         assert len(messages) == 2, "应当预置两封示例邮件"
