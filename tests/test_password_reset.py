@@ -145,7 +145,7 @@ def test_queue_requires_login(client):
     assert "/auth/login" in resp.headers["Location"]
 
 
-@pytest.mark.parametrize("role_fixture", ["student", "club"])
+@pytest.mark.parametrize("role_fixture", ["student", "teacher"])
 def test_queue_rejects_non_admin(client, login, request, role_fixture):
     user = request.getfixturevalue(role_fixture)
     login(user.student_no)
@@ -265,7 +265,7 @@ def test_reset_triggers_forced_password_change(app, client, student, admin, db_s
     assert "/auth/change-password" in login_resp.headers["Location"]
 
     # 改密之前，敲任何地址都会被拦回改密页
-    for path in ("/dashboard", "/club/", "/admin/", "/auth/me"):
+    for path in ("/dashboard", "/teacher/", "/admin/", "/auth/me"):
         blocked = student_client.get(path)
         assert blocked.status_code == 302, f"{path} 没有被拦住"
         assert "/auth/change-password" in blocked.headers["Location"]

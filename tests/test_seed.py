@@ -1,8 +1,14 @@
-"""M6：演示数据播种的联调冒烟。
+"""M6：演示数据播种的联调冒烟（V2.0）。
 
 `flask seed-demo` 是开发者拿到项目后第一件要跑的命令。它一旦坏了，
 后面所有人都卡在「没有账号、没法试」。所以这里把它当成一条真实链路来测：
 播种 → 三种角色登录 → 走一遍主闭环。
+
+V2.0 的演示数据要点名覆盖三类平时很难自然出现的场景：
+
+* **满员 + 候补队列**（暗房冲洗体验）——演示「候补中 · 第 N 位」；
+* **需审核 + 待审核申请**（人像摄影体验日、天文观测夜）——演示逐人审核；
+* **被管理员下线的活动**（电竞友谊赛）——演示「处理标记」与学生端不可见。
 """
 
 import re
@@ -15,7 +21,10 @@ from app.models import (
     AuditAction,
     AuditLog,
     Category,
+    EnrollStatus,
     Enrollment,
+    Role,
+    User,
     utcnow,
 )
 from app.seed import ACTIVITY_COUNT, DEMO_PASSWORD
@@ -45,37 +54,80 @@ def test_seed_demo_command_builds_a_usable_dataset(app):
 
         statuses = {
             status
-            for (status,) in _db.session.execute(_db.select(Activity.status).distinct())
+            for (status,)
+            in _db.session.execute(_db.select(Activity.status).distinct())
         }
-        # 七种状态全部覆盖，否则界面上有一半分支没数据可看
+        # 六种活动状态全部覆盖，否则界面上有一半分支没数据可看
         assert statuses == set(ActivityStatus.ALL)
 
-        # 报名记录与冗余计数必须对得上——这是并发控制的载体
+        # 三种角色都在
+        roles = {
+            role for (role,) in _db.session.execute(_db.select(User.role).distinct())
+        }
+        assert roles == set(Role.ALL)
+
+        # 冗余计数与真实「正式」报名数必须对得上——这是并发控制的载体。
+        # 注意：候补与待审核**不占名额**，不能算进去。
         for activity in _db.session.execute(_db.select(Activity)).scalars():
-            actual = _db.session.execute(
+            confirmed = _db.session.execute(
                 _db.select(_db.func.count())
                 .select_from(Enrollment)
-                .where(Enrollment.activity_id == activity.id)
+                .where(
+                    Enrollment.activity_id == activity.id,
+                    Enrollment.status == EnrollStatus.CONFIRMED,
+                )
             ).scalar_one()
-            assert activity.enrolled_count == actual, (
-                f"活动 {activity.title} 的 enrolled_count 与真实报名数不一致"
+            assert activity.enrolled_count == confirmed, (
+                f"活动 {activity.title} 的 enrolled_count 与真实正式报名数不一致"
             )
+
+
+def test_seeded_dataset_demos_waitlist_and_review_paths(app):
+    """V2.0 新增能力的演示数据必须存在，否则打开页面看不到这些功能。"""
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    with app.app_context():
+        workshop = _db.session.execute(
+            _db.select(Activity).where(Activity.title == "暗房冲洗体验（小班）")
+        ).scalar_one()
+        waitlisted = _db.session.execute(
+            _db.select(Enrollment).where(
+                Enrollment.activity_id == workshop.id,
+                Enrollment.status == EnrollStatus.WAITLISTED,
+            )
+        ).scalars().all()
+        assert len(waitlisted) >= 3, "满员活动应当预置候补队列，用于演示排位"
+
+        portrait = _db.session.execute(
+            _db.select(Activity).where(Activity.title == "人像摄影体验日")
+        ).scalar_one()
+        assert portrait.requires_review is True
+        assert portrait.qualification, "需审核的活动必须带参加资格说明"
+        pending = _db.session.execute(
+            _db.select(Enrollment).where(
+                Enrollment.activity_id == portrait.id,
+                Enrollment.status == EnrollStatus.PENDING,
+            )
+        ).scalars().all()
+        assert pending, "需审核的活动应当预置待审核申请，用于演示审核流程"
 
 
 def test_seeded_dataset_covers_plaza_and_interception_paths(app, client, login):
     app.test_cli_runner().invoke(args=["seed-demo"])
 
     # 刻意挑一个**没有**报名这两场活动的学生：已经报名的人看到的是
-    # 「你已报名」，看不到「名额已满 / 报名已截止」这两个拦截分支
+    # 「你已报名」，看不到「已满员 / 报名已截止」这两个拦截分支
     login("20230110", password=DEMO_PASSWORD)
 
     plaza = client.get("/activities").get_data(as_text=True)
     assert "手机摄影技巧分享会" in plaza
     assert "暗房冲洗体验（小班）" in plaza
-    # 草稿 / 待审核 / 已驳回不该出现在广场上
+    # 草稿、已下线不该出现在广场上
     assert "校园夜景采风" not in plaza
-    assert "人像摄影体验日" not in plaza
     assert "电竞友谊赛" not in plaza
+    # 需审核的活动是"已发布"，应当可见，并带「需审核」标记
+    assert "人像摄影体验日" in plaza
+    assert "需审核" in plaza
 
     with app.app_context():
         full = _db.session.execute(
@@ -86,10 +138,11 @@ def test_seeded_dataset_covers_plaza_and_interception_paths(app, client, login):
         ).scalar_one()
         full_id, closed_id = full.id, closed.id
 
-    # 「名额已满」和「报名已截止」这两个分支平时很难自然出现，
+    # 「已满员 · 可候补」和「报名已截止」这两个分支平时很难自然出现，
     # 播种数据就是为了让人能亲眼确认提示语是对的
     full_page = client.get(f"/activities/{full_id}").get_data(as_text=True)
-    assert "名额已满" in full_page
+    assert "已满员" in full_page
+    assert "加入候补队列" in full_page, "满员时应当给出候补入口（BR-3）"
 
     closed_page = client.get(f"/activities/{closed_id}").get_data(as_text=True)
     assert "报名已截止" in closed_page
@@ -136,13 +189,13 @@ def test_seeded_ongoing_activity_stays_ongoing_for_hours(app):
 
 
 def test_seeded_accounts_can_all_log_in(app, client, login):
-    """三个角色都能登录，并且各自的首页能打开。"""
+    """三个角色都能登录，并且各自的落地页能打开。"""
     app.test_cli_runner().invoke(args=["seed-demo"])
 
     for student_no, landing in [
         ("20230101", "/activities"),
         ("club001", "/my/activities"),
-        ("admin", "/admin/audit"),
+        ("admin", "/admin/activities"),
     ]:
         resp = login(student_no, password=DEMO_PASSWORD)
         assert resp.status_code == 302, f"{student_no} 登录失败"
@@ -176,8 +229,8 @@ def test_seed_reset_rebuilds_the_dataset(app):
 
     with app.app_context():
         # 人为破坏：删掉全部活动，模拟「数据被改乱了」或「放太久过期了」
-        _db.session.execute(_db.delete(Activity))
         _db.session.execute(_db.delete(Enrollment))
+        _db.session.execute(_db.delete(Activity))
         _db.session.commit()
         assert count(Activity) == 0
 
@@ -196,74 +249,60 @@ def test_seed_reset_rebuilds_the_dataset(app):
         assert ongoing.end_time - utcnow() >= timedelta(hours=2)
 
 
-def test_seeded_admin_audit_queue_is_noisy_enough_to_be_useful(app, client, login):
-    app.test_cli_runner().invoke(args=["seed-demo"])
-
-    login("admin", password=DEMO_PASSWORD)
-    html = client.get("/admin/audit").get_data(as_text=True)
-
-    assert "人像摄影体验日" in html
-    assert "天文观测夜" in html
-    assert "提交人" in html
-
-
 def test_seed_writes_a_consistent_audit_trail(app):
-    """演示数据要带上审核日志，否则审核中心看起来是坏的。
+    """演示数据要带上活动流转日志，否则「处理标记」那一格是空的。
 
-    种子是直接把活动建成「待审核 / 已驳回」这些状态的，绕过了真实的提交审核流程。
-    不补日志的话：待审核活动的「提交时间」显示成「—」，审核日志写着
-    「还没有任何审核记录」——明明有一场已驳回的活动。
+    种子是直接把活动建成「已下线 / 已取消」这些状态的，绕过了真实的
+    发布 / 下线 / 取消操作。不补日志的话，被下线活动的「处理标记」就是
+    空白——明明有一场已下线的活动，界面上却看不到是谁、为什么下的线。
 
-    这个缺陷是在浏览器里看审核中心截图时发现的，接口层断言抓不到：
+    这个缺陷是在浏览器里看页面截图时发现的，接口层断言抓不到：
     页面 200、字段都在，只是那一格是空的。
     """
     app.test_cli_runner().invoke(args=["seed-demo"])
 
     with app.app_context():
         logs = _db.session.execute(_db.select(AuditLog)).scalars().all()
-        assert logs, "审核日志一条都没有，审核中心会显示成空页面"
+        assert logs, "流转日志一条都没有，处理标记会显示成空白"
 
         by_activity = {}
         for entry in logs:
             by_activity.setdefault(entry.activity_id, []).append(entry)
 
-        pendings = _db.session.execute(
-            _db.select(Activity).where(Activity.status == ActivityStatus.PENDING)
-        ).scalars().all()
-        assert pendings, "演示数据里应当有待审核的活动"
-        for activity in pendings:
-            actions = [e.action for e in by_activity.get(activity.id, [])]
-            assert AuditAction.SUBMIT in actions, (
-                f"{activity.title} 没有提交记录，审核中心的「提交时间」会是空的"
-            )
-
-        rejected = _db.session.execute(
-            _db.select(Activity).where(Activity.status == ActivityStatus.REJECTED)
+        # 已下线的活动：必须有 PUBLISH + OFFLINE（且 OFFLINE 带原因）
+        offlined = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.OFFLINE)
         ).scalar_one()
-        rejects = [e for e in by_activity[rejected.id] if e.action == AuditAction.REJECT]
-        assert rejects and rejects[0].reason, "驳回记录必须带原因，否则追溯不到为什么被拒"
+        actions = [e.action for e in by_activity[offlined.id]]
+        assert AuditAction.PUBLISH in actions
+        offline_logs = [e for e in by_activity[offlined.id] if e.action == AuditAction.OFFLINE]
+        assert offline_logs and offline_logs[0].reason, "下线记录必须带原因（TC-14）"
 
+        # 已取消的活动：必须有取消记录
+        canceled = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.CANCELED)
+        ).scalar_one()
+        assert AuditAction.CANCEL in [e.action for e in by_activity[canceled.id]]
+
+        # 草稿：没有任何流转，不该有日志
         draft = _db.session.execute(
             _db.select(Activity).where(Activity.status == ActivityStatus.DRAFT)
         ).scalar_one()
         assert draft.id not in by_activity, "草稿没有任何流转，不该有日志"
 
-        # 日志时间必须都在「现在」之前：审核日志里出现未来时间会让人以为服务器时钟错了
+        # 日志时间必须都在「现在」之前：出现未来时间会让人以为服务器时钟错了
         for entry in logs:
             assert entry.created_at <= utcnow() + timedelta(minutes=1), entry
 
 
-def test_seeded_audit_queue_shows_a_submit_time(app, client, login):
-    """页面上那一格不能再是「—」。"""
+def test_seeded_offline_marker_is_visible_on_pages(app, client, login):
+    """页面上那一格不能再是空的——处理标记要真的渲染出来。"""
     app.test_cli_runner().invoke(args=["seed-demo"])
 
     login("admin", password=DEMO_PASSWORD)
-    html = client.get("/admin/audit").get_data(as_text=True)
+    html = client.get("/admin/activities").get_data(as_text=True)
+    assert "下线处理：" in html, "活动监督页应当显示下线原因与操作人"
 
-    assert "还没有任何审核记录" not in html, "审核日志是空的"
-    # 「提交时间」后面紧跟一个日期，而不是破折号
-    assert "提交时间" in html
-    assert not re.search(r"提交时间\s*</dt>\s*<dd[^>]*>\s*—", html), (
-        "「提交时间」还是空的"
-    )
-
+    login("club001", password=DEMO_PASSWORD)
+    mine = client.get("/my/activities").get_data(as_text=True)
+    assert "已被管理员下线" in mine

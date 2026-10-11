@@ -1,10 +1,11 @@
-"""M1：活动创建与发布、活动列表 / 详情。
+"""活动创建与发布、活动列表 / 详情（V2.0）。
 
 覆盖点：
 
-* 管理员创建 → 直接发布；社团创建 → 待审核；社团可先存草稿；
-* 表单校验的每一条规则，以及**校验失败不清空已填内容**；
-* 列表的筛选、分页、以及「草稿 / 待审核 / 已驳回对学生完全不可见」；
+* 教师创建 → **直接发布**（V2.0 没有管理员审核环节）；可以先存草稿；
+* 管理员**不能**创建 / 编辑活动（权限矩阵：不代教师编辑内容）；
+* 表单校验的每一条规则（含"需审核必须填资格说明"），以及**校验失败不清空已填内容**；
+* 列表的筛选、分页、以及「草稿 / 已下线对学生完全不可见」；
 * 编辑的权限（归谁、什么状态能改）与删除草稿；
 * 时间入库转 UTC、按状态自动推进。
 """
@@ -36,7 +37,8 @@ def activity_form(category_id, **overrides):
         "enroll_deadline": local_input(72),
         "location": "传媒楼 201",
         "capacity": "40",
-        "action": "submit",
+        "qualification": "",
+        "action": "publish",
     }
     data.update(overrides)
     return data
@@ -49,15 +51,15 @@ def post_activity(client, csrf_token, data, path="/activities"):
 
 
 # ---------------------------------------------------------------------------
-# 创建
+# 创建与发布
 # ---------------------------------------------------------------------------
 
 
-def test_admin_created_activity_is_published_immediately(
-    client, login, csrf_token, admin, category, activity_state
+def test_teacher_created_activity_is_published_immediately(
+    client, login, csrf_token, teacher, category, activity_state
 ):
-    """管理员创建的活动跳过审核，直接发布。"""
-    login(admin.student_no)
+    """V2.0：教师创建即发布，不再有"提交给管理员审核"这一步。"""
+    login(teacher.student_no)
     resp = post_activity(client, csrf_token, activity_form(category.id))
 
     assert resp.status_code == 302
@@ -65,26 +67,16 @@ def test_admin_created_activity_is_published_immediately(
     activity_id = int(resp.headers["Location"].rstrip("/").split("/")[-1])
     assert activity_state(activity_id).status == ActivityStatus.PUBLISHED
 
-
-def test_club_created_activity_waits_for_review(
-    client, login, csrf_token, club, category, activity_state
-):
-    """社团创建的活动一律进「待审核」，此时不该出现在活动广场。"""
-    login(club.student_no)
-    resp = post_activity(client, csrf_token, activity_form(category.id))
-
-    activity_id = int(resp.headers["Location"].rstrip("/").split("/")[-1])
-    assert activity_state(activity_id).status == ActivityStatus.PENDING
-
+    # 发布后立刻出现在活动广场
     plaza = client.get("/activities").get_data(as_text=True)
-    assert "手机摄影技巧分享会" not in plaza
+    assert "手机摄影技巧分享会" in plaza
 
 
-def test_club_can_save_draft_without_admin_attention(
-    client, login, csrf_token, club, category, activity_state
+def test_teacher_can_save_draft_for_later(
+    client, login, csrf_token, teacher, category, activity_state
 ):
-    """存草稿：字段可以没填完，先进 DRAFT，不惊动管理员。"""
-    login(club.student_no)
+    """存草稿：字段可以没填完，先进 DRAFT，不对外展示。"""
+    login(teacher.student_no)
     data = activity_form(category.id, action="draft", title="", location="")
     resp = post_activity(client, csrf_token, data)
 
@@ -95,11 +87,50 @@ def test_club_can_save_draft_without_admin_attention(
     assert state.title
 
 
+def test_draft_can_be_published_later(
+    client, login, csrf_token, teacher, activity_factory, activity_state
+):
+    """草稿 → 发布：教师自己就是发布者（publish 路由）。"""
+    activity = activity_factory(teacher.id, status=ActivityStatus.DRAFT)
+    login(teacher.student_no)
+
+    resp = client.post(
+        f"/activities/{activity.id}/publish",
+        data={"csrf_token": csrf_token("/dashboard")},
+    )
+    assert resp.status_code == 302
+    assert activity_state(activity.id).status == ActivityStatus.PUBLISHED
+
+
 def test_student_cannot_create_activity(client, login, csrf_token, student, category):
     """学生连表单页都进不去，更不用说提交。"""
     login(student.student_no)
     assert client.get("/activities/new").status_code == 403
     assert post_activity(client, csrf_token, activity_form(category.id)).status_code == 403
+
+
+def test_admin_cannot_create_or_edit_activities(
+    client, login, csrf_token, admin, teacher, category, activity_factory, activity_state
+):
+    """V2.0 权限矩阵：管理员 ✗ 创建 / 发布 / 修改活动（不代教师编辑内容）。
+
+    管理员的工具是「下线 / 恢复」，不是钻进教师的表单里替人改。
+    """
+    login(admin.student_no)
+
+    assert client.get("/activities/new").status_code == 403
+    assert post_activity(client, csrf_token, activity_form(category.id)).status_code == 403
+
+    # 编辑别人的活动：owner_required 不再对管理员放行
+    activity = activity_factory(teacher.id, title="别人的活动", status=ActivityStatus.PUBLISHED)
+    resp = post_activity(
+        client,
+        csrf_token,
+        activity_form(category.id, title="管理员改的"),
+        path=f"/activities/{activity.id}/edit",
+    )
+    assert resp.status_code == 403
+    assert activity_state(activity.id).title == "别人的活动"
 
 
 # ---------------------------------------------------------------------------
@@ -122,23 +153,50 @@ def test_student_cannot_create_activity(client, login, csrf_token, student, cate
         ({"start_time": local_input(96), "end_time": local_input(90)}, "结束时间必须晚于开始时间"),
         # 报名截止晚于开始
         ({"start_time": local_input(96), "enroll_deadline": local_input(120)}, "报名截止时间不能晚于活动开始时间"),
+        # 勾了「需要审核」却没写资格说明（FR-6.1）
+        ({"requires_review": "1", "qualification": ""}, "请填写参加资格说明"),
     ],
 )
 def test_form_validation_rejects_bad_input(
-    client, login, csrf_token, club, category, override, expected_message
+    client, login, csrf_token, teacher, category, override, expected_message
 ):
-    login(club.student_no)
+    login(teacher.student_no)
     resp = post_activity(client, csrf_token, activity_form(category.id, **override))
 
     assert resp.status_code == 400
     assert expected_message in resp.get_data(as_text=True)
 
 
+def test_review_switch_and_qualification_are_persisted(
+    client, login, csrf_token, teacher, category, activity_state
+):
+    """「需审核 + 资格说明」要落库，详情页要展示——学生报名前就能看到条件。"""
+    login(teacher.student_no)
+    resp = post_activity(
+        client,
+        csrf_token,
+        activity_form(
+            category.id,
+            requires_review="1",
+            qualification="面向全体在校学生；需自备相机。",
+        ),
+    )
+    activity_id = int(resp.headers["Location"].rstrip("/").split("/")[-1])
+
+    state = activity_state(activity_id)
+    assert state.requires_review is True
+    assert state.qualification == "面向全体在校学生；需自备相机。"
+
+    detail = client.get(f"/activities/{activity_id}").get_data(as_text=True)
+    assert "需审核" in detail
+    assert "面向全体在校学生；需自备相机。" in detail
+
+
 def test_validation_failure_keeps_what_the_user_typed(
-    client, login, csrf_token, club, category
+    client, login, csrf_token, teacher, category
 ):
     """校验失败必须保留已填内容——让人从头再填一遍最容易招致放弃。"""
-    login(club.student_no)
+    login(teacher.student_no)
     resp = post_activity(
         client,
         csrf_token,
@@ -160,15 +218,15 @@ def test_validation_failure_keeps_what_the_user_typed(
     assert 'value="40"' in html
 
 
-def test_unknown_category_is_rejected(client, login, csrf_token, club):
-    login(club.student_no)
+def test_unknown_category_is_rejected(client, login, csrf_token, teacher):
+    login(teacher.student_no)
     resp = post_activity(client, csrf_token, activity_form(999999))
     assert resp.status_code == 400
     assert "所选分类不存在" in resp.get_data(as_text=True)
 
 
 def test_start_time_is_stored_as_utc(
-    client, login, csrf_token, club, category, activity_state, mutate
+    client, login, csrf_token, teacher, category, mutate
 ):
     """表单填的是本地时间，落库必须转成 UTC。
 
@@ -176,7 +234,7 @@ def test_start_time_is_stored_as_utc(
     """
     from app.models import Activity
 
-    login(club.student_no)
+    login(teacher.student_no)
     resp = post_activity(client, csrf_token, activity_form(category.id))
     activity_id = int(resp.headers["Location"].rstrip("/").split("/")[-1])
 
@@ -190,16 +248,16 @@ def test_start_time_is_stored_as_utc(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", ["DRAFT", "PENDING", "REJECTED"])
+@pytest.mark.parametrize("status", ["DRAFT", "OFFLINE"])
 def test_non_public_statuses_are_invisible_to_students(
-    client, login, student, club, activity_factory, status
+    client, login, student, teacher, activity_factory, status
 ):
-    """草稿、待审核、已驳回对普通学生完全不可见。
+    """草稿、**已下线**对普通学生完全不可见。
 
-    活动由社团创建，学生是**局外人**。如果拿学生自己的账号建活动，
+    活动由教师创建，学生是**局外人**。如果拿学生自己的账号建活动，
     他就成了创建者，本来就应该看得到——那样测的就不是可见性了。
     """
-    activity = activity_factory(club.id, title="不该被看到的活动", status=status)
+    activity = activity_factory(teacher.id, title="不该被看到的活动", status=status)
 
     login(student.student_no)
     plaza = client.get("/activities").get_data(as_text=True)
@@ -208,30 +266,43 @@ def test_non_public_statuses_are_invisible_to_students(
     assert client.get(f"/activities/{activity.id}").status_code == 404
 
 
-def test_creator_can_open_their_own_draft(
-    client, login, club, activity_factory
+def test_offlined_activity_still_visible_to_organizer_and_admin(
+    client, login, teacher, admin, activity_factory
 ):
-    activity = activity_factory(club.id, title="校园夜景采风", status=ActivityStatus.DRAFT)
-    login(club.student_no)
+    """TC-14：被下线的活动，教师端与管理员仍可见（含处理标记）。"""
+    activity = activity_factory(teacher.id, title="被下线的活动", status=ActivityStatus.OFFLINE)
+
+    login(teacher.student_no)
+    assert client.get(f"/activities/{activity.id}").status_code == 200
+    assert "已被管理员下线" in client.get(f"/activities/{activity.id}").get_data(as_text=True)
+
+    login(admin.student_no)
+    assert client.get(f"/activities/{activity.id}").status_code == 200
+
+
+def test_creator_can_open_their_own_draft(
+    client, login, teacher, activity_factory
+):
+    activity = activity_factory(teacher.id, title="校园夜景采风", status=ActivityStatus.DRAFT)
+    login(teacher.student_no)
 
     resp = client.get(f"/activities/{activity.id}")
     assert resp.status_code == 200
     assert "校园夜景采风" in resp.get_data(as_text=True)
 
 
-def test_other_club_cannot_open_someone_elses_draft(
-    client, login, club, user_factory, activity_factory
+def test_other_teacher_cannot_open_someone_elses_draft(
+    client, login, teacher, other_teacher, activity_factory
 ):
-    stranger = user_factory("club002", "动漫社", "CLUB")
-    activity = activity_factory(club.id, title="别人的草稿", status=ActivityStatus.DRAFT)
+    activity = activity_factory(teacher.id, title="别人的草稿", status=ActivityStatus.DRAFT)
 
-    login(stranger.student_no)
+    login(other_teacher.student_no)
     assert client.get(f"/activities/{activity.id}").status_code == 404
 
 
-def test_plaza_filters_by_category_and_keyword(client, login, student, club, category, activity_factory):
-    activity_factory(club.id, title="摄影作品点评会", category_id=category.id)
-    activity_factory(club.id, title="校园马拉松", category_id=category.id, location="田径场")
+def test_plaza_filters_by_category_and_keyword(client, login, student, teacher, category, activity_factory):
+    activity_factory(teacher.id, title="摄影作品点评会", category_id=category.id)
+    activity_factory(teacher.id, title="校园马拉松", category_id=category.id, location="田径场")
 
     login(student.student_no)
     plaza = client.get("/activities").get_data(as_text=True)
@@ -244,42 +315,47 @@ def test_plaza_filters_by_category_and_keyword(client, login, student, club, cat
     assert "校园马拉松" not in other
 
 
-def test_plaza_is_paginated(client, login, student, club, activity_factory):
+def test_plaza_is_paginated(client, login, student, teacher, activity_factory):
     """必须分页，不允许一次查出全表。"""
     for index in range(12):
-        activity_factory(club.id, title=f"活动-{index:02d}")
+        activity_factory(teacher.id, title=f"活动-{index:02d}")
 
     login(student.student_no)
     first = client.get("/activities").get_data(as_text=True)
     second = client.get("/activities?page=2").get_data(as_text=True)
 
     assert "共 12 场活动" in first
-    # 每页 10 条：第一页有「活动-11」，没有「活动-00」；第二页反过来
+    # 每页 10 条：第一页有「活动-11」，没有「活动-01」；第二页反过来
     assert "活动-11" in first
     assert "活动-01" not in first
     assert "活动-01" in second
 
 
-def test_plaza_default_sort_is_latest_first(client, login, student, club, activity_factory):
-    activity_factory(club.id, title="较早的活动", start_in_hours=10, end_in_hours=12)
-    activity_factory(club.id, title="较晚的活动", start_in_hours=100, end_in_hours=102)
+def test_plaza_default_sort_is_latest_first(client, login, student, teacher, activity_factory):
+    activity_factory(teacher.id, title="较早的活动", start_in_hours=10, end_in_hours=12)
+    activity_factory(teacher.id, title="较晚的活动", start_in_hours=100, end_in_hours=102)
 
     login(student.student_no)
     html = client.get("/activities").get_data(as_text=True)
     assert html.index("较晚的活动") < html.index("较早的活动")
 
 
-def test_list_card_shows_remaining_seats_and_deadline_state(
-    client, login, student, club, activity_factory
+def test_list_card_shows_enroll_state_marker(
+    client, login, student, teacher, activity_factory
 ):
-    """卡片上要直接给出决策信息，别让人点进去才发现报不上。"""
-    activity_factory(club.id, title="快满的活动", capacity=3, enrolled_count=3)
-    activity_factory(club.id, title="已截止的活动", deadline_in_hours=-1)
+    """FR-1.1：列表里能一眼区分「可报名 / 已满员·可候补」。
+
+    卡片上要直接给出决策信息，别让人点进去才发现报不上。
+    """
+    activity_factory(teacher.id, title="还能报名的活动", capacity=10, enrolled_count=3)
+    activity_factory(teacher.id, title="满员的活动", capacity=3, enrolled_count=3)
+    activity_factory(teacher.id, title="已截止的活动", deadline_in_hours=-1)
 
     login(student.student_no)
     html = client.get("/activities").get_data(as_text=True)
 
-    assert "名额已满" in html
+    assert "可报名" in html
+    assert "已满员 · 可候补" in html
     assert "报名已截止" in html
 
 
@@ -288,13 +364,13 @@ def test_list_card_shows_remaining_seats_and_deadline_state(
 # ---------------------------------------------------------------------------
 
 
-def test_club_can_edit_own_unpublished_activity(
-    client, login, csrf_token, club, category, activity_factory, activity_state
+def test_teacher_can_edit_own_draft(
+    client, login, csrf_token, teacher, category, activity_factory, activity_state
 ):
     activity = activity_factory(
-        club.id, title="旧标题", status=ActivityStatus.DRAFT
+        teacher.id, title="旧标题", status=ActivityStatus.DRAFT
     )
-    login(club.student_no)
+    login(teacher.student_no)
 
     resp = post_activity(
         client,
@@ -306,30 +382,33 @@ def test_club_can_edit_own_unpublished_activity(
     assert activity_state(activity.id).title == "新标题"
 
 
-def test_club_cannot_edit_published_activity(
-    client, login, csrf_token, club, category, activity_factory, activity_state
+def test_teacher_can_edit_own_published_activity(
+    client, login, csrf_token, teacher, category, activity_factory, activity_state
 ):
-    """社团只能改「本人创建且未发布」的活动。"""
-    activity = activity_factory(club.id, title="已发布", status=ActivityStatus.PUBLISHED)
-    login(club.student_no)
+    """FR-7.2：时间、地点等有变化时可及时调整——**已发布**的活动也能改。
+
+    这是 V2.0 相对 V1.0 的一个明确放松：V1.0 里「社团发布后不能再改」，
+    但访谈里教师明确要求能改（T-02）。
+    """
+    activity = activity_factory(teacher.id, title="已发布", status=ActivityStatus.PUBLISHED)
+    login(teacher.student_no)
 
     resp = post_activity(
         client,
         csrf_token,
-        activity_form(category.id, title="偷偷改标题"),
+        activity_form(category.id, title="改好的标题", location="新场地"),
         path=f"/activities/{activity.id}/edit",
     )
-    assert resp.status_code == 302  # 被拦下并重定向回详情页
-    assert activity_state(activity.id).title == "已发布"
+    assert resp.status_code == 302
+    assert activity_state(activity.id).title == "改好的标题"
 
 
-def test_club_cannot_edit_someone_elses_activity(
-    client, login, csrf_token, club, user_factory, category, activity_factory
+def test_teacher_cannot_edit_someone_elses_activity(
+    client, login, csrf_token, teacher, other_teacher, category, activity_factory
 ):
-    stranger = user_factory("club003", "街舞社", "CLUB")
-    activity = activity_factory(club.id, title="别人的草稿", status=ActivityStatus.DRAFT)
+    activity = activity_factory(teacher.id, title="别人的草稿", status=ActivityStatus.DRAFT)
 
-    login(stranger.student_no)
+    login(other_teacher.student_no)
     resp = post_activity(
         client,
         csrf_token,
@@ -339,15 +418,18 @@ def test_club_cannot_edit_someone_elses_activity(
     assert resp.status_code == 403
 
 
-def test_admin_can_edit_activity_in_progress_is_locked(
-    client, login, csrf_token, admin, category, activity_factory, activity_state
+def test_ongoing_activity_is_locked_for_editing(
+    client, login, csrf_token, teacher, category, activity_factory, activity_state
 ):
-    """管理员能改别人的活动，但「进行中」的信息已经锁定。"""
+    """活动一旦开始（进行中），信息整体锁定。
+
+    报名名单、签到都以当时的信息为准；边办边改活动信息只会让人跑空场地。
+    """
     activity = activity_factory(
-        admin.id, title="进行中", status=ActivityStatus.ONGOING,
+        teacher.id, title="进行中", status=ActivityStatus.ONGOING,
         start_in_hours=-1, end_in_hours=1, deadline_in_hours=-2,
     )
-    login(admin.student_no)
+    login(teacher.student_no)
 
     resp = post_activity(
         client,
@@ -360,12 +442,12 @@ def test_admin_can_edit_activity_in_progress_is_locked(
 
 
 def test_capacity_cannot_drop_below_enrolled_count(
-    client, login, csrf_token, club, category, activity_factory, activity_state
+    client, login, csrf_token, teacher, category, activity_factory, activity_state
 ):
     activity = activity_factory(
-        club.id, status=ActivityStatus.DRAFT, capacity=10, enrolled_count=6
+        teacher.id, status=ActivityStatus.DRAFT, capacity=10, enrolled_count=6
     )
-    login(club.student_no)
+    login(teacher.student_no)
 
     resp = post_activity(
         client,
@@ -379,11 +461,11 @@ def test_capacity_cannot_drop_below_enrolled_count(
 
 
 def test_only_draft_can_be_deleted(
-    client, login, csrf_token, club, activity_factory, activity_state
+    client, login, csrf_token, teacher, activity_factory, activity_state
 ):
-    draft = activity_factory(club.id, status=ActivityStatus.DRAFT)
-    published = activity_factory(club.id, status=ActivityStatus.PUBLISHED)
-    login(club.student_no)
+    draft = activity_factory(teacher.id, status=ActivityStatus.DRAFT)
+    published = activity_factory(teacher.id, status=ActivityStatus.PUBLISHED)
+    login(teacher.student_no)
 
     client.post(
         f"/activities/{draft.id}/delete", data={"csrf_token": csrf_token("/dashboard")}
@@ -402,23 +484,23 @@ def test_only_draft_can_be_deleted(
 # ---------------------------------------------------------------------------
 
 
-def test_status_advances_with_time(client, login, admin, activity_factory, activity_state):
+def test_status_advances_with_time(client, login, teacher, activity_factory, activity_state):
     """到点自动推进：PUBLISHED → ONGOING → FINISHED。
 
-    这样就不必为 MVP 引入一套定时任务依赖——状态完全由时间决定，
+    这样就不必引入一套定时任务依赖——状态完全由时间决定，
     读的时候顺手算一次即可。
     """
     starting = activity_factory(
-        admin.id, status=ActivityStatus.PUBLISHED,
+        teacher.id, status=ActivityStatus.PUBLISHED,
         start_in_hours=-1, end_in_hours=2, deadline_in_hours=-2,
     )
     ending = activity_factory(
-        admin.id, status=ActivityStatus.ONGOING,
+        teacher.id, status=ActivityStatus.ONGOING,
         start_in_hours=-3, end_in_hours=-1, deadline_in_hours=-4,
     )
-    future = activity_factory(admin.id, status=ActivityStatus.PUBLISHED)
+    future = activity_factory(teacher.id, status=ActivityStatus.PUBLISHED)
 
-    login(admin.student_no)
+    login(teacher.student_no)
     client.get("/activities")  # 任意一次请求都会触发同步
 
     assert activity_state(starting.id).status == ActivityStatus.ONGOING
@@ -426,16 +508,31 @@ def test_status_advances_with_time(client, login, admin, activity_factory, activ
     assert activity_state(future.id).status == ActivityStatus.PUBLISHED
 
 
+def test_offlined_activity_does_not_advance_with_time(
+    client, login, teacher, activity_factory, activity_state
+):
+    """被下线的活动不参与时间推进：它已经不在时间线上（恢复时再重新定位）。"""
+    activity = activity_factory(
+        teacher.id, status=ActivityStatus.OFFLINE,
+        start_in_hours=-1, end_in_hours=2, deadline_in_hours=-2,
+    )
+
+    login(teacher.student_no)
+    client.get("/activities")
+
+    assert activity_state(activity.id).status == ActivityStatus.OFFLINE
+
+
 def test_entering_ongoing_generates_check_in_code(
-    client, login, admin, activity_factory, activity_state
+    client, login, teacher, activity_factory, activity_state
 ):
     activity = activity_factory(
-        admin.id, status=ActivityStatus.PUBLISHED,
+        teacher.id, status=ActivityStatus.PUBLISHED,
         start_in_hours=-1, end_in_hours=2, deadline_in_hours=-2,
     )
     assert activity_state(activity.id).check_in_code is None
 
-    login(admin.student_no)
+    login(teacher.student_no)
     client.get("/activities")
 
     code = activity_state(activity.id).check_in_code
@@ -443,7 +540,7 @@ def test_entering_ongoing_generates_check_in_code(
 
 
 # ---------------------------------------------------------------------------
-# 卡片上「剩余名额 · 报名状态」这一段
+# 卡片上「报名状态」这一段
 # ---------------------------------------------------------------------------
 
 
@@ -454,23 +551,27 @@ def card_meta_lines(html):
 
 
 def test_card_meta_never_ends_with_a_dangling_separator(
-    client, login, student, club, activity_factory
+    client, login, student, teacher, activity_factory
 ):
     """活动卡片末尾不能挂着孤零零的「·」。
 
-    ``enroll_closed_note`` 在「已发布、且还没到截止时间」时**什么都不输出**，
-    而这恰恰是最常见的情况——每一个还能报名的活动都落在这一支上。模板里原来
-    无条件渲染分隔符，于是整页卡片几乎全都显示成「剩余 40 / 40 个名额 ·」，
-    多一个没有下文的点号。
+    这条是从 V1.0 留下来的回归：当年「剩余名额」和「截止提示」用「·」拼接、
+    分隔符无条件渲染，而"还能报名"恰恰是最常见的情况，于是整页卡片几乎全都
+    显示成「剩余 40 / 40 个名额 ·」，多一个没有下文的点号。
 
-    这类问题接口层断言抓不到（HTTP 状态和字段值全对），只有把页面真的渲染出来
-    看才会发现——是在浏览器里截图时才看见的。
+    V2.0 把这一行改成由 `enroll_line` 宏统一渲染，保证**永远有内容**。
+    这类问题接口层断言抓不到（HTTP 状态和字段值全对），只有把页面真的渲染
+    出来看才会发现。
     """
-    activity_factory(club.id, title="还能报名的活动", deadline_in_hours=24)
-    activity_factory(club.id, title="已截止的活动", deadline_in_hours=-2)
+    activity_factory(teacher.id, title="还能报名的活动", deadline_in_hours=24)
+    activity_factory(teacher.id, title="已截止的活动", deadline_in_hours=-2)
     activity_factory(
-        club.id, title="满员且已截止的活动",
+        teacher.id, title="满员且已截止的活动",
         capacity=5, enrolled_count=5, deadline_in_hours=-2,
+    )
+    activity_factory(
+        teacher.id, title="满员但还能候补的活动",
+        capacity=5, enrolled_count=5, deadline_in_hours=24,
     )
 
     login(student.student_no)
@@ -482,11 +583,34 @@ def test_card_meta_never_ends_with_a_dangling_separator(
     for line in lines:
         assert not line.endswith("·"), f"卡片末尾挂着多余的分隔符：{line!r}"
 
-    # 反过来也要成立：有后半段时，分隔符必须正常出现，别为了修 A 把 B 弄坏
     joined = " ".join(lines)
-    assert "个名额 · 报名已截止" in joined, f"有截止提示时分隔符反而没了：{joined!r}"
-    assert any(line.startswith("名额已满 ·") for line in lines), (
-        "满员时的「名额已满 · 报名已截止」这类组合也不能丢："
-        f"{[l for l in lines if '名额已满' in l]!r}"
+    assert "可报名" in joined, f"可报名的卡片上没有「可报名」标记（FR-1.1）：{joined!r}"
+    assert "已满员 · 可候补" in joined, (
+        f"满员但还能候补的卡片标记不对（FR-1.1）：{joined!r}"
     )
+    assert "报名已截止" in joined
 
+
+# ---------------------------------------------------------------------------
+# 静态资源本地化：Bootstrap 不依赖外网 CDN
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_is_served_locally(client):
+    """页面的 Bootstrap 必须来自本地 static，不能引外网 CDN。
+
+    校园网与演示环境经常连不上外域：取不到样式时页面"白底裸奔"——
+    功能都对，但给人看的第一印象是"这系统坏了"。这条测试防止有人
+    顺手把 CDN 链接改回去。
+    """
+    resp = client.get("/static/vendor/bootstrap.min.css")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Bootstrap" in body[:300], "拿到的不是 Bootstrap 样式文件"
+    assert "--bs-body-" in body, "样式文件不完整"
+
+    assert client.get("/static/vendor/bootstrap.bundle.min.js").status_code == 200
+
+    base = open("app/templates/base.html", encoding="utf-8").read()
+    for probe in ("cdn.jsdelivr.net", "unpkg.com", "cdn.bootcdn.net", "staticfile.net"):
+        assert probe not in base, f"base.html 又引用了外部 CDN：{probe}"

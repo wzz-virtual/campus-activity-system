@@ -85,6 +85,156 @@ def test_prepare_database_creates_tables_first(app):
 
 
 # ---------------------------------------------------------------------------
+# V1.0 → V2.0 的就地迁移
+# ---------------------------------------------------------------------------
+
+
+def make_v1_database(application):
+    """把一张库"降级"成 V1.0 的样子：去掉 V2.0 新列、写入旧取值。
+
+    做法：先用当前模型建表，再把 V2.0 新增的列 ALTER 掉，
+    然后插入旧词表（CLUB / PENDING / ENROLLED）的数据行。
+    这样得到的就是一份货真价实的 V1.0 库——迁移代码面对的就是它。
+
+    ⚠️ `reviewed_by` 留着不删：SQLite 不允许 DROP 被外键定义引用的列
+    （`unknown column ... in foreign key definition`）。它对迁移没有影响——
+    迁移是逐列检查"缺了才补"，列已经在就跳过，正好也顺带测了幂等性。
+    """
+    from sqlalchemy import text
+
+    from app.extensions import db as _db
+
+    with application.app_context():
+        _db.create_all()
+        for stmt in (
+            "ALTER TABLE activity DROP COLUMN requires_review",
+            "ALTER TABLE activity DROP COLUMN qualification",
+            "ALTER TABLE enrollment DROP COLUMN waitlisted_at",
+            "ALTER TABLE enrollment DROP COLUMN reviewed_at",
+        ):
+            _db.session.execute(text(stmt))
+
+        # 三个角色 + 一个旧状态的活动 + 一条旧状态的报名
+        _db.session.execute(
+            text(
+                "INSERT INTO user (student_no, name, password_hash, role, status,"
+                " failed_login_count, must_change_password, created_at, updated_at)"
+                " VALUES ('club001', '小张', 'x', 'CLUB', 1, 0, 0,"
+                " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+        _db.session.execute(
+            text(
+                "INSERT INTO category (name, sort_order, created_at)"
+                " VALUES ('讲座', 0, CURRENT_TIMESTAMP)"
+            )
+        )
+        _db.session.execute(
+            text(
+                "INSERT INTO activity (title, category_id, organizer_id, start_time,"
+                " end_time, capacity, enrolled_count, enroll_deadline, status,"
+                " created_at, updated_at)"
+                " VALUES ('旧活动', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 10, 1,"
+                " CURRENT_TIMESTAMP, 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+        _db.session.execute(
+            text(
+                "INSERT INTO enrollment (activity_id, user_id, status, enrolled_at)"
+                " VALUES (1, 1, 'ENROLLED', CURRENT_TIMESTAMP)"
+            )
+        )
+        _db.session.commit()
+
+
+def test_prepare_database_migrates_a_v1_database_in_place(tmp_path):
+    """V1.0 的老库要能就地升级到 V2.0——账号、活动、报名一条不少。
+
+    线上沙箱里可能就躺着一个 V1.0 的库：直接换新代码跑，模型上的新列一张表
+    也没有，第一个查询就会炸。迁移必须发生在任何业务查询之前。
+
+    翻译规则：CLUB→TEACHER；PENDING→PUBLISHED（审核流取消，视为已发布）；
+    ENROLLED→CONFIRMED（V2.0 里叫「正式」）。
+    """
+    from sqlalchemy import text
+
+    from app import create_app
+    from app.extensions import db as _db
+    from app.migrations import schema_needs_upgrade
+
+    database = tmp_path / "old.db"
+    application = create_app(
+        "test", SQLALCHEMY_DATABASE_URI=f"sqlite:///{database.as_posix()}"
+    )
+    make_v1_database(application)
+
+    with application.app_context():
+        assert schema_needs_upgrade() is True, "这份库没被识别成 V1.0"
+
+    summary = prepare_database(application)
+
+    # 库里有数据 → 不播种，但迁移必须已经完成
+    assert summary is None
+
+    with application.app_context():
+        from app.models import Activity, Role, User
+
+        assert schema_needs_upgrade() is False, "迁移之后结构应当已是 V2.0"
+
+        user = _db.session.execute(
+            _db.select(User).where(User.student_no == "club001")
+        ).scalar_one()
+        assert user.role == Role.TEACHER, "CLUB 应当被翻译成 TEACHER"
+
+        activity = _db.session.execute(_db.select(Activity)).scalar_one()
+        assert activity.status == "PUBLISHED", "PENDING 应当被翻译成 PUBLISHED"
+        assert activity.requires_review is False, "新列应当有默认值"
+        assert activity.qualification is None
+
+        row = _db.session.execute(
+            text("SELECT status FROM enrollment WHERE id = 1")
+        ).one()
+        assert row[0] == "CONFIRMED", "ENROLLED 应当被翻译成 CONFIRMED"
+
+        # 新列由迁移补齐（逐列检查，缺一个补一个）
+        activity_columns = {
+            item[1]
+            for item in _db.session.execute(text("PRAGMA table_info(activity)"))
+        }
+        assert {"requires_review", "qualification"} <= activity_columns
+        enrollment_columns = {
+            item[1]
+            for item in _db.session.execute(text("PRAGMA table_info(enrollment)"))
+        }
+        assert {"waitlisted_at", "reviewed_at", "reviewed_by"} <= enrollment_columns
+
+
+def test_upgrade_to_v2_is_idempotent(tmp_path):
+    """迁移可以重复执行：已经是 V2.0 的库再跑一次，什么都不改。"""
+    from app import create_app
+    from app.extensions import db as _db
+    from app.migrations import schema_needs_upgrade, upgrade_to_v2
+
+    database = tmp_path / "fresh.db"
+    application = create_app(
+        "test", SQLALCHEMY_DATABASE_URI=f"sqlite:///{database.as_posix()}"
+    )
+
+    with application.app_context():
+        _db.create_all()
+        assert schema_needs_upgrade() is False
+        assert upgrade_to_v2() == [], "新库不需要迁移，也不该报错"
+
+    make_v1_database(application)
+
+    with application.app_context():
+        first = upgrade_to_v2()
+        assert first, "V1.0 的库应当产生迁移动作"
+        second = upgrade_to_v2()
+        assert second == [], "重复迁移应当无操作"
+
+
+# ---------------------------------------------------------------------------
 # 启动入口的环境准备
 # ---------------------------------------------------------------------------
 

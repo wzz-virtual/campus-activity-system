@@ -137,8 +137,15 @@ def student(user_factory):
 
 
 @pytest.fixture
-def club(user_factory):
-    return user_factory("club001", "摄影协会", Role.CLUB)
+def teacher(user_factory):
+    """活动组织教师账号（V2.0 的角色，V1.0 里叫「社团」）。"""
+    return user_factory("teacher001", "张老师", Role.TEACHER)
+
+
+@pytest.fixture
+def other_teacher(user_factory):
+    """另一位教师，用于验证「只能管理本人活动」的边界。"""
+    return user_factory("teacher002", "林老师", Role.TEACHER)
 
 
 @pytest.fixture
@@ -253,6 +260,7 @@ def activity_factory(app, category):
                 title=activity.title,
                 capacity=capacity,
                 organizer_id=organizer_id,
+                requires_review=activity.requires_review,
             )
 
     return _make
@@ -278,8 +286,38 @@ def activity_state(app):
                 capacity=activity.capacity,
                 enrolled_count=activity.enrolled_count,
                 check_in_code=activity.check_in_code,
-                reject_reason=activity.reject_reason,
-                approved_by=activity.approved_by,
+                requires_review=activity.requires_review,
+                qualification=activity.qualification,
+            )
+
+    return _get
+
+
+@pytest.fixture
+def enrollment_state(app):
+    """读取某条报名记录的当前状态（含候补排位），供断言用。"""
+
+    def _get(activity_id, user_id):
+        from app.services import waitlist_position
+
+        with app.app_context():
+            enrollment = _db.session.execute(
+                _db.select(Enrollment).where(
+                    Enrollment.activity_id == activity_id,
+                    Enrollment.user_id == user_id,
+                )
+            ).scalar_one_or_none()
+            if enrollment is None:
+                return None
+            return SimpleNamespace(
+                id=enrollment.id,
+                status=enrollment.status,
+                enrolled_at=enrollment.enrolled_at,
+                waitlisted_at=enrollment.waitlisted_at,
+                reviewed_at=enrollment.reviewed_at,
+                canceled_at=enrollment.canceled_at,
+                check_in_at=enrollment.check_in_at,
+                position=waitlist_position(enrollment),
             )
 
     return _get
@@ -307,11 +345,12 @@ def mutate(app):
 def enroll_factory(app, activity_factory):
     """直接造报名记录，用于铺陈名单 / 统计的测试数据。
 
-    注意它会**同步推进**活动的 ``enrolled_count``，因为这个字段是并发控制
-    的载体，单独改报名表而不动计数，会造出生产里不可能出现的脏数据。
+    注意它会**同步推进**活动的 ``enrolled_count``（只对「正式」记录）——
+    因为这个字段是并发控制的载体，单独改报名表而不动计数，会造出生产里
+    不可能出现的脏数据。候补不占名额，所以不推进计数。
     """
 
-    def _make(activity_id, user_ids, checked_in=(), status=EnrollStatus.ENROLLED):
+    def _make(activity_id, user_ids, checked_in=(), status=EnrollStatus.CONFIRMED):
         checked = set(checked_in)
         with app.app_context():
             activity = _db.session.get(Activity, activity_id)
@@ -323,10 +362,12 @@ def enroll_factory(app, activity_factory):
                         user_id=user_id,
                         status=status,
                         enrolled_at=utcnow(),
+                        # 候补记录必须有「进入候补时间」，排位完全依赖它
+                        waitlisted_at=utcnow() if status == EnrollStatus.WAITLISTED else None,
                         check_in_at=utcnow() if is_checked else None,
                     )
                 )
-                if status == EnrollStatus.ENROLLED:
+                if status == EnrollStatus.CONFIRMED:
                     activity.enrolled_count += 1
             _db.session.commit()
             return activity.enrolled_count

@@ -21,7 +21,7 @@ from conftest import DEFAULT_PASSWORD
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/dashboard", "/admin/", "/club/"])
+@pytest.mark.parametrize("path", ["/dashboard", "/admin/", "/teacher/"])
 def test_anonymous_is_sent_to_login(client, path):
     """未登录访问受保护页面 → 跳登录页，并记住原本要去的地方。"""
     resp = client.get(path)
@@ -66,7 +66,7 @@ def test_admin_page_allows_admin(client, admin, login):
     assert "管理后台" in resp.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("role_fixture", ["student", "club"])
+@pytest.mark.parametrize("role_fixture", ["student", "teacher"])
 def test_admin_page_rejects_non_admin(client, login, request, role_fixture):
     user = request.getfixturevalue(role_fixture)
     login(user.student_no)
@@ -74,29 +74,29 @@ def test_admin_page_rejects_non_admin(client, login, request, role_fixture):
     assert resp.status_code == 403
 
 
-def test_club_page_allows_club(client, club, login):
-    login(club.student_no)
-    resp = client.get("/club/")
+def test_teacher_page_allows_teacher(client, teacher, login):
+    login(teacher.student_no)
+    resp = client.get("/teacher/")
     assert resp.status_code == 200
-    assert "社团工作台" in resp.get_data(as_text=True)
+    assert "教师工作台" in resp.get_data(as_text=True)
 
 
-def test_club_page_rejects_student(client, student, login):
+def test_teacher_page_rejects_student(client, student, login):
     login(student.student_no)
-    assert client.get("/club/").status_code == 403
+    assert client.get("/teacher/").status_code == 403
 
 
-def test_club_page_rejects_admin(client, admin, login):
-    """管理员能管全部活动，但不等于能进社团工作台。
+def test_teacher_page_rejects_admin(client, admin, login):
+    """管理员能监督全部活动，但不等于能进教师工作台。
 
-    这是刻意的：`role_required(Role.CLUB)` 只放行社团。管理员需要看社团的东西，
-    应该走管理后台的入口，而不是借用社团身份——否则权限边界会变得模糊。
+    这是刻意的：`role_required(Role.TEACHER)` 只放行教师。管理员需要看活动，
+    应该走「活动监督」入口，而不是借用教师身份——否则权限边界会变得模糊。
     """
     login(admin.student_no)
-    assert client.get("/club/").status_code == 403
+    assert client.get("/teacher/").status_code == 403
 
 
-@pytest.mark.parametrize("role_fixture", ["student", "club", "admin"])
+@pytest.mark.parametrize("role_fixture", ["student", "teacher", "admin"])
 def test_dashboard_is_open_to_every_logged_in_role(client, login, request, role_fixture):
     user = request.getfixturevalue(role_fixture)
     login(user.student_no)
@@ -139,6 +139,77 @@ def test_me_returns_role_from_database(client, admin, login):
     resp = client.get("/auth/me")
     assert resp.status_code == 200
     assert resp.get_json()["role"] == Role.ADMIN
+
+
+# ---------------------------------------------------------------------------
+# V2.0 的权限边界：管理员不介入报名、教师只管本人活动
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path_template",
+    [
+        "/activities/{id}/enrollments",
+        "/activities/{id}/stats",
+        "/activities/{id}/enrollments/export",
+    ],
+)
+def test_admin_cannot_touch_enrollments_or_rosters(
+    client, login, csrf_token, admin, teacher, activity_factory, path_template
+):
+    """权限矩阵：管理员 ✗ 查看报名名单、✗ 操作报名（A-07）。
+
+    管理员对活动的工具是「下线 / 恢复」——不是钻进教师的活动里替他管报名。
+    """
+    activity = activity_factory(teacher.id)
+    login(admin.student_no)
+    assert client.get(path_template.format(id=activity.id)).status_code == 403
+
+
+def test_teacher_cannot_open_another_teachers_roster(
+    client, login, teacher, other_teacher, activity_factory
+):
+    """BR-11：教师只能管理本人活动——名单、统计都碰不到别人的。"""
+    activity = activity_factory(teacher.id)
+    login(other_teacher.student_no)
+    assert client.get(f"/activities/{activity.id}/enrollments").status_code == 403
+    assert client.get(f"/activities/{activity.id}/stats").status_code == 403
+
+
+def test_student_cannot_view_or_cancel_someone_elses_enrollment(
+    client, login, csrf_token, student, teacher, user_factory, activity_factory, enroll_factory
+):
+    """TC-11：学生 B 既看不到、也动不了学生 A 的报名。"""
+    other = user_factory("20230901", "另一个学生")
+    activity = activity_factory(teacher.id, deadline_in_hours=48)
+    enroll_factory(activity.id, [other.id])
+
+    login(student.student_no)
+
+    # 看不到：名单页 403；「我的报名」里没有别人的记录
+    assert client.get(f"/activities/{activity.id}/enrollments").status_code == 403
+    mine = client.get("/my/enrollments").get_data(as_text=True)
+    assert "另一个学生" not in mine
+
+    # 动不了：B 点「取消报名」只会作用在自己身上，A 的记录原封不动
+    resp = client.post(
+        f"/activities/{activity.id}/unenroll",
+        data={"csrf_token": csrf_token("/dashboard")},
+        follow_redirects=True,
+    )
+    assert "你还没有报名这个活动" in resp.get_data(as_text=True)
+
+    with client.application.app_context():
+        from app.extensions import db as _db
+        from app.models import Enrollment, EnrollStatus
+
+        row = _db.session.execute(
+            _db.select(Enrollment).where(
+                Enrollment.activity_id == activity.id,
+                Enrollment.user_id == other.id,
+            )
+        ).scalar_one()
+        assert row.status == EnrollStatus.CONFIRMED
 
 
 # ---------------------------------------------------------------------------

@@ -137,7 +137,9 @@ def live_server(tmp_path):
 def test_public_pages_render(live_server):
     assert '"status": "ok"' in live_server.get("/health")
 
-    assert "手机摄影技巧分享会" in live_server.get("/")
+    # 首页只列「最近 4 场」已发布 / 进行中的活动（按开始时间倒序），
+    # 挑一场确实排在前四的来断言——种子里开始时间最晚的那场。
+    assert "天文观测夜" in live_server.get("/")
 
     plaza = live_server.get("/activities")
     assert "活动广场" in plaza
@@ -145,7 +147,7 @@ def test_public_pages_render(live_server):
 
 
 def test_student_can_enroll_and_cancel(live_server):
-    # 20230115 是播种数据里唯一没报名任何活动的学生，
+    # 20230115 是播种数据里没报名活动 1 的学生，
     # 用它才能看到「报名前 / 报名后」的真实变化
     live_server.login("20230115")
     assert "我的报名" in live_server.get("/my/enrollments")
@@ -161,7 +163,21 @@ def test_student_can_enroll_and_cancel(live_server):
     assert quota_of(live_server.get("/activities/1")) == (12, 30), "取消后名额没有回退"
 
 
-def test_club_roster_and_csv_export(live_server):
+def test_full_activity_gives_waitlist_over_real_http(live_server):
+    """满员活动报名 → 进入候补并显示排位（V2.0 的主路径，走真实 HTTP 验一遍）。"""
+    live_server.login("20230115")  # 没报过暗房（满员：5/5，已有 3 人候补）
+
+    detail = live_server.get("/activities/2")
+    assert quota_of(detail) == (5, 5)
+
+    live_server.post("/activities/2/enroll", {"csrf_token": csrf_of(detail)})
+
+    after = live_server.get("/activities/2")
+    assert "候补中" in after and "第 4 位" in after, "满员报名应当进入候补并给出排位"
+    assert quota_of(after) == (5, 5), "候补不占名额，正式人数不能变"
+
+
+def test_teacher_roster_and_csv_export(live_server):
     live_server.login("club001")
 
     roster = live_server.get("/activities/4/enrollments")
@@ -170,22 +186,31 @@ def test_club_roster_and_csv_export(live_server):
 
     payload = live_server.raw("/activities/4/enrollments/export")
     assert payload.startswith(b"\xef\xbb\xbf"), "CSV 缺少 UTF-8 BOM，Excel 打开会乱码"
-    assert "序号,学号,姓名".encode("utf-8") in payload
+    assert "序号,状态,学号,姓名".encode("utf-8") in payload
 
-    assert "整体签到率" in live_server.get("/club/stats")
+    assert "整体签到率" in live_server.get("/teacher/stats")
 
 
-def test_admin_approval_publishes_the_activity(live_server):
+def test_admin_supervision_offline_and_restore(live_server):
+    """管理员：活动监督（下线 / 恢复）走真实 HTTP 验一遍。"""
     live_server.login("admin")
 
-    audit = live_server.get("/admin/audit")
-    assert "待审核队列" in audit
-    assert "人像摄影体验日" in audit
+    supervision = live_server.get("/admin/activities")
+    assert "活动监督" in supervision
+    assert "手机摄影技巧分享会" in supervision
 
-    detail = live_server.get("/activities/7")
-    live_server.post("/activities/7/approve", {"csrf_token": csrf_of(detail)})
+    # 下线活动 1，学生端立刻不可见
+    detail = live_server.get("/activities/1")
+    live_server.post(
+        "/admin/activities/1/offline",
+        {"csrf_token": csrf_of(detail), "reason": "冒烟测试"},
+    )
+    assert "手机摄影技巧分享会" not in live_server.get("/activities")
 
-    assert "人像摄影体验日" in live_server.get("/activities")
+    # 恢复后重新可见
+    detail = live_server.get("/activities/1")
+    live_server.post("/admin/activities/1/restore", {"csrf_token": csrf_of(detail)})
+    assert "手机摄影技巧分享会" in live_server.get("/activities")
 
     assert "分类管理" in live_server.get("/admin/categories")
     assert "用户管理" in live_server.get("/admin/users")
@@ -196,7 +221,7 @@ def test_role_switching_works_over_real_http(live_server):
     for student_no, landing, marker in [
         ("20230101", "/activities", "活动广场"),
         ("club001", "/my/activities", "我的活动"),
-        ("admin", "/admin/audit", "审核中心"),
+        ("admin", "/admin/activities", "活动监督"),
     ]:
         live_server.login(student_no)
         page = live_server.get(landing)

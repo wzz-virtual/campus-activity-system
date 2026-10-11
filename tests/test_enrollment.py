@@ -1,10 +1,13 @@
-"""M3：报名与取消报名，含并发控制与 24 小时名单锁定。
+"""报名与取消报名（V2.0），含并发控制与 24 小时名单锁定。
 
 这是整个系统最容易翻车的地方，所以这里的测试分三层：
 
 1. **规则层** —— 直接调 ``services.enroll``，能把时间卡到「截止前后各一秒」；
 2. **接口层** —— 走真实 HTTP，验证按钮状态与拦截提示；
-3. **并发层** —— 多线程同时报名，断言不超卖。
+3. **并发层** —— 多线程同时报名，断言不超卖、不重复。
+
+候补队列与自动递补的专项测试见 ``test_waitlist.py``；
+报名审核（"通过 ≠ 正式"）见 ``test_review.py``。
 """
 
 import threading
@@ -48,8 +51,8 @@ def enroll_rows(app, activity_id):
 # ---------------------------------------------------------------------------
 
 
-def test_happy_path_enroll(client, login, csrf_token, student, club, activity_factory, activity_state):
-    activity = activity_factory(club.id, capacity=10)
+def test_happy_path_enroll(client, login, csrf_token, student, teacher, activity_factory, activity_state):
+    activity = activity_factory(teacher.id, capacity=10)
     login(student.student_no)
 
     resp = post(client, csrf_token, f"/activities/{activity.id}/enroll")
@@ -58,29 +61,30 @@ def test_happy_path_enroll(client, login, csrf_token, student, club, activity_fa
     state = activity_state(activity.id)
     assert state.enrolled_count == 1
     rows = enroll_rows(client.application, activity.id)
-    assert len(rows) == 1 and rows[0].status == EnrollStatus.ENROLLED
+    assert len(rows) == 1 and rows[0].status == EnrollStatus.CONFIRMED
 
 
 @pytest.mark.parametrize(
     "status,expected",
     [
         (ActivityStatus.DRAFT, "该活动尚未发布"),
-        (ActivityStatus.PENDING, "该活动尚未发布"),
-        (ActivityStatus.REJECTED, "该活动尚未发布"),
         (ActivityStatus.ONGOING, "活动已开始，报名通道已关闭"),
         (ActivityStatus.FINISHED, "该活动已结束"),
         (ActivityStatus.CANCELED, "该活动已取消"),
+        (ActivityStatus.OFFLINE, "该活动已被管理员下线，暂不接受报名"),
     ],
 )
 def test_enroll_requires_published_status(
-    app, student, club, activity_factory, status, expected
+    app, student, teacher, activity_factory, status, expected
 ):
     """只有「已发布」的活动可以报名。
 
     直接调规则层，避免 HTTP 层的状态同步把活动提前推进到 ONGOING，
     反而测不到我们想测的那个分支。
+
+    ⚠️ 注意「满员」**不在**被拒之列：那是候补的入口，不是失败（BR-3）。
     """
-    activity = activity_factory(club.id, status=status, start_in_hours=48)
+    activity = activity_factory(teacher.id, status=status, start_in_hours=48)
     with app.app_context():
         ok, message = services.enroll(activity.id, student.id)
 
@@ -88,19 +92,9 @@ def test_enroll_requires_published_status(
     assert message == expected
 
 
-def test_enroll_rejects_when_full(client, login, csrf_token, student, club, activity_factory, activity_state):
-    activity = activity_factory(club.id, capacity=3, enrolled_count=3)
-    login(student.student_no)
-
-    post(client, csrf_token, f"/activities/{activity.id}/enroll")
-
-    assert activity_state(activity.id).enrolled_count == 3
-    assert "名额已满" in client.get(f"/activities/{activity.id}").get_data(as_text=True)
-
-
-def test_enroll_rejects_duplicate(client, login, csrf_token, student, club, activity_factory, activity_state):
+def test_enroll_rejects_duplicate(client, login, csrf_token, student, teacher, activity_factory, activity_state):
     """重复报名不改变人数，也不该多出一条记录。"""
-    activity = activity_factory(club.id, capacity=10)
+    activity = activity_factory(teacher.id, capacity=10)
     login(student.student_no)
 
     post(client, csrf_token, f"/activities/{activity.id}/enroll")
@@ -111,9 +105,9 @@ def test_enroll_rejects_duplicate(client, login, csrf_token, student, club, acti
     assert "你已经报名过这个活动了" in resp.get_data(as_text=True)
 
 
-def test_enroll_requires_login(client, csrf_token, student, club, activity_factory):
+def test_enroll_requires_login(client, csrf_token, student, teacher, activity_factory):
     """未登录不能报名：带上合法的 CSRF 凭证也只是被送到登录页。"""
-    activity = activity_factory(club.id)
+    activity = activity_factory(teacher.id)
     resp = client.post(
         f"/activities/{activity.id}/enroll", data={"csrf_token": csrf_token()}
     )
@@ -121,9 +115,9 @@ def test_enroll_requires_login(client, csrf_token, student, club, activity_facto
     assert "/auth/login" in resp.headers["Location"]
 
 
-def test_enroll_without_csrf_token_is_rejected(client, student, club, activity_factory):
+def test_enroll_without_csrf_token_is_rejected(client, student, teacher, activity_factory):
     """没有 CSRF 凭证的写请求在进入视图之前就被拦掉。"""
-    activity = activity_factory(club.id)
+    activity = activity_factory(teacher.id)
     assert client.post(f"/activities/{activity.id}/enroll").status_code == 400
 
 
@@ -132,7 +126,7 @@ def test_enroll_without_csrf_token_is_rejected(client, student, club, activity_f
 # ---------------------------------------------------------------------------
 
 
-def test_enroll_deadline_boundary_is_exact_to_the_second(app, student, club, activity_factory):
+def test_enroll_deadline_boundary_is_exact_to_the_second(app, student, teacher, activity_factory):
     """报名截止前后各一秒的行为。
 
     在同一个应用上下文里「先设截止时间、立刻报名」，中间只隔几微秒，
@@ -140,7 +134,7 @@ def test_enroll_deadline_boundary_is_exact_to_the_second(app, student, club, act
     ±1 秒这种断言根本立不住。
     """
     # 截止还差 1 秒 —— 可以报名
-    just_in_time = activity_factory(club.id, deadline_in_hours=1)
+    just_in_time = activity_factory(teacher.id, deadline_in_hours=1)
     with app.app_context():
         activity = _db.session.get(Activity, just_in_time.id)
         activity.enroll_deadline = utcnow() + timedelta(seconds=1)
@@ -149,7 +143,7 @@ def test_enroll_deadline_boundary_is_exact_to_the_second(app, student, club, act
     assert ok, "截止前 1 秒应该还能报名"
 
     # 截止已过 1 秒 —— 拒绝
-    just_late = activity_factory(club.id, deadline_in_hours=1)
+    just_late = activity_factory(teacher.id, deadline_in_hours=1)
     with app.app_context():
         activity = _db.session.get(Activity, just_late.id)
         activity.enroll_deadline = utcnow() - timedelta(seconds=1)
@@ -166,11 +160,13 @@ def test_enroll_deadline_boundary_is_exact_to_the_second(app, student, club, act
 def test_concurrent_enroll_never_exceeds_capacity(concurrent_app):
     """并发压测：40 个人同时抢 25 个名额。
 
-    断言三件事：
+    V2.0 的新语义：抢不到的**不再被丢弃**，而是全部进入候补队列（BR-3）。
+    断言四件事：
 
-    * ``enrolled_count`` 恰好等于人数上限，不多不少；
-    * 报名记录数等于上限，且没有重复的 ``(活动, 用户)``；
-    * 成功返回的次数与落库记录数一致——不能出现「扣了名额但没记录」的静默丢失。
+    * ``enrolled_count`` 恰好等于人数上限，不多不少（BR-1）；
+    * 正式记录数等于上限、候补记录数等于剩下的 15，且没有重复的 ``(活动, 用户)``；
+    * 候补排位是 1..15 的一次排列——同一微秒写入也不会出现并列或跳号；
+    * 成功返回的次数 = 正式 + 候补——没有"被丢弃"的报名。
     """
     user_count = 40
     capacity = 25
@@ -179,7 +175,7 @@ def test_concurrent_enroll_never_exceeds_capacity(concurrent_app):
         from app.models import Category
 
         category = Category(name="并发测试", sort_order=0)
-        organizer = User(student_no="org-concurrent", name="组织者", role=Role.CLUB)
+        organizer = User(student_no="org-concurrent", name="组织者", role=Role.TEACHER)
         organizer.set_password("Test-Password-2026")
         _db.session.add_all([category, organizer])
         _db.session.flush()
@@ -247,15 +243,25 @@ def test_concurrent_enroll_never_exceeds_capacity(concurrent_app):
             .all()
         )
 
+        confirmed = [row for row in rows if row.status == EnrollStatus.CONFIRMED]
+        waitlisted = [row for row in rows if row.status == EnrollStatus.WAITLISTED]
+
         assert activity.enrolled_count == capacity, (
             f"超卖或被少扣：enrolled_count={activity.enrolled_count}，上限={capacity}"
         )
-        assert len(rows) == capacity
-        assert len({row.user_id for row in rows}) == capacity, "出现了重复报名记录"
-        assert {row.status for row in rows} == {EnrollStatus.ENROLLED}
+        assert len(rows) == user_count, "有人被丢弃了——抢不到名额应当是进入候补"
+        assert len(confirmed) == capacity
+        assert len(waitlisted) == user_count - capacity
+        assert len({row.user_id for row in rows}) == user_count, "出现了重复报名记录"
+
+        # 候补排位必须是不重不漏的 1..N
+        positions = sorted(
+            services.waitlist_position(row) for row in waitlisted
+        )
+        assert positions == list(range(1, user_count - capacity + 1))
 
     succeeded = [item for item in results if item[1]]
-    assert len(succeeded) == capacity, "成功次数与落库记录数对不上"
+    assert len(succeeded) == user_count, "成功次数与落库记录数对不上"
 
 
 def test_concurrent_double_submit_by_same_user_creates_one_record(concurrent_app):
@@ -264,7 +270,7 @@ def test_concurrent_double_submit_by_same_user_creates_one_record(concurrent_app
         from app.models import Category
 
         category = Category(name="重复提交测试", sort_order=0)
-        organizer = User(student_no="org-dup", name="组织者", role=Role.CLUB)
+        organizer = User(student_no="org-dup", name="组织者", role=Role.TEACHER)
         organizer.set_password("Test-Password-2026")
         _db.session.add_all([category, organizer])
         _db.session.flush()
@@ -321,10 +327,10 @@ def test_concurrent_double_submit_by_same_user_creates_one_record(concurrent_app
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_enrollment_releases_the_seat(client, login, csrf_token, student, club, activity_factory, activity_state):
+def test_cancel_enrollment_releases_the_seat(client, login, csrf_token, student, teacher, activity_factory, activity_state):
     # 截止时间刻意放到 48 小时后：锁定窗口是「距截止不足 24 小时」，
     # 用默认的 24 小时会正好落在窗口边界上，测出来的是锁定规则而不是释放名额
-    activity = activity_factory(club.id, capacity=10, deadline_in_hours=48)
+    activity = activity_factory(teacher.id, capacity=10, deadline_in_hours=48)
     login(student.student_no)
 
     post(client, csrf_token, f"/activities/{activity.id}/enroll")
@@ -337,9 +343,9 @@ def test_cancel_enrollment_releases_the_seat(client, login, csrf_token, student,
     assert rows[0].status == EnrollStatus.CANCELED
 
 
-def test_canceled_enrollment_can_be_revived(client, login, csrf_token, student, club, activity_factory, activity_state):
+def test_canceled_enrollment_can_be_revived(client, login, csrf_token, student, teacher, activity_factory, activity_state):
     """取消之后还能再报回来——但复用的是同一条记录，不会多出一条。"""
-    activity = activity_factory(club.id, capacity=10, deadline_in_hours=48)
+    activity = activity_factory(teacher.id, capacity=10, deadline_in_hours=48)
     login(student.student_no)
 
     post(client, csrf_token, f"/activities/{activity.id}/enroll")
@@ -348,14 +354,14 @@ def test_canceled_enrollment_can_be_revived(client, login, csrf_token, student, 
 
     assert activity_state(activity.id).enrolled_count == 1
     rows = enroll_rows(client.application, activity.id)
-    assert len(rows) == 1 and rows[0].status == EnrollStatus.ENROLLED
+    assert len(rows) == 1 and rows[0].status == EnrollStatus.CONFIRMED
 
 
 def test_cancel_is_blocked_inside_the_24_hour_lock_window(
-    app, student, club, activity_factory
+    app, student, teacher, activity_factory
 ):
     """距报名截止不足 24 小时起，名单锁定。"""
-    activity = activity_factory(club.id, deadline_in_hours=1)
+    activity = activity_factory(teacher.id, deadline_in_hours=1)
     with app.app_context():
         assert services.enroll(activity.id, student.id)[0]
 
@@ -370,8 +376,8 @@ def test_cancel_is_blocked_inside_the_24_hour_lock_window(
     assert message == "距报名截止不足 24 小时，名单已锁定"
 
 
-def test_cancel_is_allowed_just_outside_the_lock_window(app, student, club, activity_factory):
-    activity = activity_factory(club.id, deadline_in_hours=48)
+def test_cancel_is_allowed_just_outside_the_lock_window(app, student, teacher, activity_factory):
+    activity = activity_factory(teacher.id, deadline_in_hours=48)
     with app.app_context():
         assert services.enroll(activity.id, student.id)[0]
 
@@ -390,14 +396,15 @@ def test_cancel_is_allowed_just_outside_the_lock_window(app, student, club, acti
     [
         (ActivityStatus.FINISHED, "活动已结束"),
         (ActivityStatus.CANCELED, "活动已取消"),
-        (ActivityStatus.ONGOING, "活动已开始，无法取消报名"),
+        (ActivityStatus.ONGOING, "活动已开始，名单已锁定"),
+        (ActivityStatus.OFFLINE, "该活动已被管理员下线，暂不能操作"),
         (ActivityStatus.DRAFT, "该活动尚未发布"),
     ],
 )
 def test_cancel_blocked_by_activity_status(
-    app, student, club, activity_factory, mutate, status, expected
+    app, student, teacher, activity_factory, mutate, status, expected
 ):
-    activity = activity_factory(club.id, deadline_in_hours=48)
+    activity = activity_factory(teacher.id, deadline_in_hours=48)
     with app.app_context():
         assert services.enroll(activity.id, student.id)[0]
 
@@ -410,9 +417,9 @@ def test_cancel_blocked_by_activity_status(
     assert message == expected
 
 
-def test_checked_in_enrollment_cannot_be_canceled(app, student, club, activity_factory, mutate):
+def test_checked_in_enrollment_cannot_be_canceled(app, student, teacher, activity_factory, mutate):
     """已签到的报名不可取消，否则统计口径会前后矛盾。"""
-    activity = activity_factory(club.id, deadline_in_hours=48)
+    activity = activity_factory(teacher.id, deadline_in_hours=48)
     with app.app_context():
         assert services.enroll(activity.id, student.id)[0]
 
@@ -432,10 +439,10 @@ def test_checked_in_enrollment_cannot_be_canceled(app, student, club, activity_f
 
 
 def test_cancel_deadline_text_is_shown_while_still_cancelable(
-    client, login, csrf_token, student, club, activity_factory
+    client, login, csrf_token, student, teacher, activity_factory
 ):
     """还能取消的时候就要写明可以反悔到什么时候，而不是等锁定了才说不行。"""
-    activity = activity_factory(club.id, deadline_in_hours=48)
+    activity = activity_factory(teacher.id, deadline_in_hours=48)
     login(student.student_no)
 
     post(client, csrf_token, f"/activities/{activity.id}/enroll")
@@ -445,8 +452,8 @@ def test_cancel_deadline_text_is_shown_while_still_cancelable(
     assert "名单锁定" in detail
 
 
-def test_repeated_cancel_is_rejected(client, login, csrf_token, student, club, activity_factory):
-    activity = activity_factory(club.id, deadline_in_hours=48)
+def test_repeated_cancel_is_rejected(client, login, csrf_token, student, teacher, activity_factory):
+    activity = activity_factory(teacher.id, deadline_in_hours=48)
     login(student.student_no)
 
     post(client, csrf_token, f"/activities/{activity.id}/enroll")
@@ -462,13 +469,13 @@ def test_repeated_cancel_is_rejected(client, login, csrf_token, student, club, a
 
 
 def test_my_enrollments_shows_four_check_in_states(
-    client, login, student, club, activity_factory, enroll_factory
+    client, login, student, teacher, activity_factory, enroll_factory
 ):
-    """签到状态对学生分四种呈现：待参加 / 待签到 / 已签到 / 缺席。"""
-    upcoming = activity_factory(club.id, title="待参加的活动")
-    ongoing = activity_factory(club.id, title="待签到的活动", status=ActivityStatus.ONGOING)
-    checked = activity_factory(club.id, title="已签到的活动", status=ActivityStatus.FINISHED)
-    absent = activity_factory(club.id, title="缺席的活动", status=ActivityStatus.FINISHED)
+    """签到状态对「正式」报名分四种呈现：待参加 / 待签到 / 已签到 / 缺席。"""
+    upcoming = activity_factory(teacher.id, title="待参加的活动")
+    ongoing = activity_factory(teacher.id, title="待签到的活动", status=ActivityStatus.ONGOING)
+    checked = activity_factory(teacher.id, title="已签到的活动", status=ActivityStatus.FINISHED)
+    absent = activity_factory(teacher.id, title="缺席的活动", status=ActivityStatus.FINISHED)
 
     enroll_factory(upcoming.id, [student.id])
     enroll_factory(ongoing.id, [student.id])
@@ -485,10 +492,10 @@ def test_my_enrollments_shows_four_check_in_states(
 
 
 def test_my_enrollments_explains_why_cancel_is_unavailable(
-    client, login, student, club, activity_factory, enroll_factory
+    client, login, student, teacher, activity_factory, enroll_factory
 ):
     """不可取消时必须逐条给出原因，不能只有一个置灰的按钮。"""
-    locked = activity_factory(club.id, title="锁定的活动", deadline_in_hours=1)
+    locked = activity_factory(teacher.id, title="锁定的活动", deadline_in_hours=1)
     enroll_factory(locked.id, [student.id])
 
     login(student.student_no)

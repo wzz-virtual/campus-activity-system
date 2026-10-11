@@ -57,10 +57,10 @@ def test_category_name_must_be_unique(admin_client, csrf_token, category, app):
 
 
 def test_category_cannot_be_deleted_while_still_in_use(
-    admin_client, csrf_token, category, club, activity_factory, app
+    admin_client, csrf_token, category, teacher, activity_factory, app
 ):
     """删除前必须校验引用——直接删会让那些活动的分类指向一个不存在的记录。"""
-    activity_factory(club.id, category_id=category.id)
+    activity_factory(teacher.id, category_id=category.id)
 
     resp = post(
         admin_client,
@@ -95,8 +95,8 @@ def test_unused_category_can_be_deleted(admin_client, csrf_token, app):
         assert _db.session.get(Category, category_id) is None
 
 
-def test_non_admin_cannot_touch_categories(client, login, csrf_token, club):
-    login(club.student_no)
+def test_non_admin_cannot_touch_categories(client, login, csrf_token, teacher):
+    login(teacher.student_no)
     assert client.get("/admin/categories").status_code == 403
     assert post(client, csrf_token, "/admin/categories", name="偷偷加的").status_code == 403
 
@@ -175,7 +175,7 @@ def test_admin_can_change_role(admin_client, csrf_token, student, app):
         admin_client,
         csrf_token,
         f"/admin/users/{student.id}",
-        role="CLUB",
+        role="TEACHER",
         status="1",
         club_name="摄影协会",
     )
@@ -185,7 +185,7 @@ def test_admin_can_change_role(admin_client, csrf_token, student, app):
         from app.models import User
 
         updated = _db.session.get(User, student.id)
-        assert updated.role == "CLUB"
+        assert updated.role == "TEACHER"
         assert updated.club_name == "摄影协会"
 
 
@@ -198,10 +198,10 @@ def test_disabled_account_cannot_log_in(admin_client, csrf_token, student, login
 
 
 def test_disabling_an_account_keeps_its_enrollments(
-    admin_client, csrf_token, student, club, activity_factory, enroll_factory, app
+    admin_client, csrf_token, student, teacher, activity_factory, enroll_factory, app
 ):
     """停用后历史报名与签到记录保留，统计口径不会因为有人离校就变样。"""
-    activity = activity_factory(club.id)
+    activity = activity_factory(teacher.id)
     enroll_factory(activity.id, [student.id], checked_in=[student.id])
 
     post(admin_client, csrf_token, f"/admin/users/{student.id}", role="STUDENT", status="0")
@@ -267,8 +267,8 @@ def test_system_always_keeps_at_least_one_active_admin(
         assert _db.session.get(User, other.id).role == "STUDENT"
 
 
-def test_non_admin_cannot_manage_users(client, login, csrf_token, club, student):
-    login(club.student_no)
+def test_non_admin_cannot_manage_users(client, login, csrf_token, teacher, student):
+    login(teacher.student_no)
     assert client.get("/admin/users").status_code == 403
     assert post(client, csrf_token, f"/admin/users/{student.id}", role="ADMIN").status_code == 403
 
@@ -284,13 +284,13 @@ def test_non_admin_cannot_manage_users(client, login, csrf_token, club, student)
 # ---------------------------------------------------------------------------
 
 
-def test_admin_cannot_escalate_via_form_parameter(client, login, csrf_token, club, app):
+def test_admin_cannot_escalate_via_form_parameter(client, login, csrf_token, teacher, app):
     """社团在请求体里塞 role=ADMIN 建账号，不会有任何效果。
 
     拦截发生在读表单参数之前，所以这里拿到的只能是 403——权限判断的输入
     永远不包括请求体里的角色字段。
     """
-    login(club.student_no)
+    login(teacher.student_no)
     resp = post(
         client, csrf_token, "/admin/users", student_no="hacker", name="hacker",
         role="ADMIN", password="Whatever-Pass-2026",

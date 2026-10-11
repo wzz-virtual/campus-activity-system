@@ -16,10 +16,10 @@ def post(client, csrf_token, path, follow_redirects=False, **data):
 
 
 @pytest.fixture
-def ongoing(club, activity_factory, mutate):
+def ongoing(teacher, activity_factory, mutate):
     """一场已经进入「进行中」、签到码为 482913 的活动。"""
     activity = activity_factory(
-        club.id,
+        teacher.id,
         title="手机摄影技巧分享会",
         status=ActivityStatus.ONGOING,
         start_in_hours=-1,
@@ -95,11 +95,11 @@ def test_repeated_check_in_is_rejected(client, login, csrf_token, student, ongoi
 
 
 @pytest.mark.parametrize("status", ["PUBLISHED", "FINISHED", "CANCELED", "DRAFT"])
-def test_check_in_requires_ongoing_status(client, login, csrf_token, student, club, activity_factory, mutate, status):
+def test_check_in_requires_ongoing_status(client, login, csrf_token, student, teacher, activity_factory, mutate, status):
     """只有「进行中」才开放签到。"""
     from app import services
 
-    activity = activity_factory(club.id, status=status, start_in_hours=-1, end_in_hours=2)
+    activity = activity_factory(teacher.id, status=status, start_in_hours=-1, end_in_hours=2)
     with client.application.app_context():
         row = _db.session.get(Activity, activity.id)
         row.status = status
@@ -111,7 +111,7 @@ def test_check_in_requires_ongoing_status(client, login, csrf_token, student, cl
             Enrollment(
                 activity_id=activity.id,
                 user_id=student.id,
-                status=EnrollStatus.ENROLLED,
+                status=EnrollStatus.CONFIRMED,
                 enrolled_at=utcnow(),
             )
         )
@@ -142,8 +142,8 @@ def test_cancelled_enrollment_cannot_check_in(client, login, csrf_token, student
     assert "你没有报名这个活动" in resp.get_data(as_text=True)
 
 
-def test_check_in_page_explains_why_it_is_closed(client, login, student, club, activity_factory):
-    activity = activity_factory(club.id, status=ActivityStatus.PUBLISHED, start_in_hours=48)
+def test_check_in_page_explains_why_it_is_closed(client, login, student, teacher, activity_factory):
+    activity = activity_factory(teacher.id, status=ActivityStatus.PUBLISHED, start_in_hours=48)
     login(student.student_no)
 
     page = client.get(f"/activities/{activity.id}/check-in").get_data(as_text=True)
@@ -156,11 +156,11 @@ def test_check_in_page_explains_why_it_is_closed(client, login, student, club, a
 
 
 def test_organizer_can_mark_and_undo_check_in(
-    client, login, csrf_token, club, student, ongoing, enroll_factory
+    client, login, csrf_token, teacher, student, ongoing, enroll_factory
 ):
     """手动勾选与撤销误操作都要能用。"""
     enroll_factory(ongoing.id, [student.id])
-    login(club.student_no)
+    login(teacher.student_no)
 
     # 勾上
     post(
@@ -174,7 +174,7 @@ def test_organizer_can_mark_and_undo_check_in(
             _db.select(Enrollment).where(Enrollment.activity_id == ongoing.id)
         ).scalar_one()
         assert row.check_in_at is not None
-        assert row.check_in_by == club.id  # 手动核验要记下是谁操作的
+        assert row.check_in_by == teacher.id  # 手动核验要记下是谁操作的
 
     # 撤销
     post(
@@ -192,12 +192,12 @@ def test_organizer_can_mark_and_undo_check_in(
 
 
 def test_manual_check_in_requires_ongoing_status(
-    client, login, csrf_token, club, student, activity_factory, enroll_factory
+    client, login, csrf_token, teacher, student, activity_factory, enroll_factory
 ):
-    activity = activity_factory(club.id, status=ActivityStatus.PUBLISHED, start_in_hours=48)
+    activity = activity_factory(teacher.id, status=ActivityStatus.PUBLISHED, start_in_hours=48)
     enroll_factory(activity.id, [student.id])
 
-    login(club.student_no)
+    login(teacher.student_no)
     resp = post(
         client,
         csrf_token,
@@ -208,8 +208,8 @@ def test_manual_check_in_requires_ongoing_status(
     assert "只有进行中的活动才能核验签到" in resp.get_data(as_text=True)
 
 
-def test_manual_check_in_requires_an_enrollment(client, login, csrf_token, club, student, ongoing):
-    login(club.student_no)
+def test_manual_check_in_requires_an_enrollment(client, login, csrf_token, teacher, student, ongoing):
+    login(teacher.student_no)
     resp = post(
         client,
         csrf_token,
@@ -217,12 +217,12 @@ def test_manual_check_in_requires_an_enrollment(client, login, csrf_token, club,
         checked_in="1",
         follow_redirects=True,
     )
-    assert "该用户没有报名这个活动" in resp.get_data(as_text=True)
+    assert "该用户不在正式名单中" in resp.get_data(as_text=True)
 
 
-def test_duplicate_manual_check_in_is_rejected(client, login, csrf_token, club, student, ongoing, enroll_factory):
+def test_duplicate_manual_check_in_is_rejected(client, login, csrf_token, teacher, student, ongoing, enroll_factory):
     enroll_factory(ongoing.id, [student.id])
-    login(club.student_no)
+    login(teacher.student_no)
 
     path = f"/activities/{ongoing.id}/enrollments/{student.id}/check-in"
     post(client, csrf_token, path, checked_in="1")
@@ -231,11 +231,11 @@ def test_duplicate_manual_check_in_is_rejected(client, login, csrf_token, club, 
     assert "该用户已经签到了" in resp.get_data(as_text=True)
 
 
-def test_stranger_club_cannot_verify_check_in(
-    client, login, csrf_token, club, user_factory, student, ongoing, enroll_factory
+def test_stranger_teacher_cannot_verify_check_in(
+    client, login, csrf_token, teacher, user_factory, student, ongoing, enroll_factory
 ):
-    """核验签到是「创建者或管理员」的权力，别的社团碰不到。"""
-    stranger = user_factory("club007", "话剧社", "CLUB")
+    """核验签到是**该活动组织教师本人**的权力，别的教师碰不到。"""
+    stranger = user_factory("club007", "话剧社", "TEACHER")
     enroll_factory(ongoing.id, [student.id])
 
     login(stranger.student_no)
@@ -248,36 +248,46 @@ def test_stranger_club_cannot_verify_check_in(
     assert resp.status_code == 403
 
 
-def test_admin_can_verify_check_in_for_any_activity(
+def test_admin_cannot_verify_check_in_for_any_activity(
     client, login, csrf_token, admin, student, ongoing, enroll_factory
 ):
+    """V2.0：管理员**不介入具体报名**——核验签到也不行（A-07）。
+
+    V1.0 里管理员对全部资源放行；V2.0 的权限矩阵把这条收紧了：
+    管理员对活动的工具只有「下线 / 恢复」。
+    """
     enroll_factory(ongoing.id, [student.id])
 
     login(admin.student_no)
-    post(
+    resp = post(
         client,
         csrf_token,
         f"/activities/{ongoing.id}/enrollments/{student.id}/check-in",
         checked_in="1",
     )
+    assert resp.status_code == 403
+
     with client.application.app_context():
         row = _db.session.execute(
             _db.select(Enrollment).where(Enrollment.activity_id == ongoing.id)
         ).scalar_one()
-        assert row.check_in_at is not None
+        assert row.check_in_at is None
 
 
-def test_roster_page_shows_check_in_code_and_rate(
-    client, login, csrf_token, club, student, ongoing, enroll_factory
+def test_roster_page_shows_check_in_code_and_headcounts(
+    client, login, csrf_token, teacher, student, ongoing, enroll_factory
 ):
+    """名单页要有签到码，以及 FR-3.2 要求的四个数字：上限 / 正式 / 候补 / 余位。"""
     enroll_factory(ongoing.id, [student.id])
 
-    login(club.student_no)
+    login(teacher.student_no)
     html = client.get(f"/activities/{ongoing.id}/enrollments").get_data(as_text=True)
 
     assert "482913" in html
-    assert "签到率" in html
-    assert "上座率" in html
+    assert "人数上限" in html
+    assert "正式人数" in html
+    assert "候补人数" in html
+    assert "剩余名额" in html
 
 
 def test_student_cannot_open_the_roster(client, login, student, ongoing):
@@ -286,11 +296,11 @@ def test_student_cannot_open_the_roster(client, login, student, ongoing):
 
 
 def test_open_check_in_closes_enrollment(
-    client, login, csrf_token, club, student, activity_factory, activity_state
+    client, login, csrf_token, teacher, student, activity_factory, activity_state
 ):
     """开启签到会把活动推进到进行中，同时关闭报名与取消通道。"""
-    activity = activity_factory(club.id, status=ActivityStatus.PUBLISHED, start_in_hours=6, deadline_in_hours=2)
-    login(club.student_no)
+    activity = activity_factory(teacher.id, status=ActivityStatus.PUBLISHED, start_in_hours=6, deadline_in_hours=2)
+    login(teacher.student_no)
 
     client.post(
         f"/activities/{activity.id}/check-in/open",
