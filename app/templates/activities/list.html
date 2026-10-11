@@ -90,10 +90,16 @@
 
           <div class="small mb-3">
             {# 决策所需的信息直接摆在卡片上：还剩多少名额、报名有没有截止。
-               不要让学生点进去才发现报不上。 #}
-            {{ m.quota_text(activity) }}
-            <span class="text-secondary mx-1">·</span>
-            {{ m.enroll_closed_note(activity, now) }}
+               不要让学生点进去才发现报不上。
+
+               分隔符必须跟着后一段一起出：enroll_closed_note 在「已发布且还没到
+               截止时间」时什么都不输出，这时如果无条件渲染「·」，卡片上就会挂着
+               一个孤零零的点号。而这恰恰是最常见的情况——每一个还能报名的活动
+               都会这样显示。 #}
+            {% set closed_note = m.enroll_closed_note(activity, now) %}
+            {{ m.quota_text(activity) }}{% if closed_note %}
+              <span class="text-secondary mx-1">·</span>{{ closed_note }}
+            {%- endif %}
           </div>
 
           <div class="mt-auto d-flex align-items-center gap-2">

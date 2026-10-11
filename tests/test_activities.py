@@ -9,6 +9,7 @@
 * 时间入库转 UTC、按状态自动推进。
 """
 
+import re
 from datetime import timedelta
 
 import pytest
@@ -439,3 +440,53 @@ def test_entering_ongoing_generates_check_in_code(
 
     code = activity_state(activity.id).check_in_code
     assert code is not None and len(code) == 6 and code.isdigit()
+
+
+# ---------------------------------------------------------------------------
+# 卡片上「剩余名额 · 报名状态」这一段
+# ---------------------------------------------------------------------------
+
+
+def card_meta_lines(html):
+    """把每张活动卡片里那一行说明文字的纯文本抠出来。"""
+    blocks = re.findall(r'<div class="small mb-3">(.*?)</div>', html, re.S)
+    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", b)).strip() for b in blocks]
+
+
+def test_card_meta_never_ends_with_a_dangling_separator(
+    client, login, student, club, activity_factory
+):
+    """活动卡片末尾不能挂着孤零零的「·」。
+
+    ``enroll_closed_note`` 在「已发布、且还没到截止时间」时**什么都不输出**，
+    而这恰恰是最常见的情况——每一个还能报名的活动都落在这一支上。模板里原来
+    无条件渲染分隔符，于是整页卡片几乎全都显示成「剩余 40 / 40 个名额 ·」，
+    多一个没有下文的点号。
+
+    这类问题接口层断言抓不到（HTTP 状态和字段值全对），只有把页面真的渲染出来
+    看才会发现——是在浏览器里截图时才看见的。
+    """
+    activity_factory(club.id, title="还能报名的活动", deadline_in_hours=24)
+    activity_factory(club.id, title="已截止的活动", deadline_in_hours=-2)
+    activity_factory(
+        club.id, title="满员且已截止的活动",
+        capacity=5, enrolled_count=5, deadline_in_hours=-2,
+    )
+
+    login(student.student_no)
+    html = client.get("/activities").get_data(as_text=True)
+
+    lines = card_meta_lines(html)
+    assert lines, "没抓到卡片的说明行，选择器可能已经变了"
+
+    for line in lines:
+        assert not line.endswith("·"), f"卡片末尾挂着多余的分隔符：{line!r}"
+
+    # 反过来也要成立：有后半段时，分隔符必须正常出现，别为了修 A 把 B 弄坏
+    joined = " ".join(lines)
+    assert "个名额 · 报名已截止" in joined, f"有截止提示时分隔符反而没了：{joined!r}"
+    assert any(line.startswith("名额已满 ·") for line in lines), (
+        "满员时的「名额已满 · 报名已截止」这类组合也不能丢："
+        f"{[l for l in lines if '名额已满' in l]!r}"
+    )
+
