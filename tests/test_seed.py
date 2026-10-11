@@ -9,7 +9,15 @@ import re
 from datetime import timedelta
 
 from app.extensions import db as _db
-from app.models import Activity, ActivityStatus, Category, Enrollment, utcnow
+from app.models import (
+    Activity,
+    ActivityStatus,
+    AuditAction,
+    AuditLog,
+    Category,
+    Enrollment,
+    utcnow,
+)
 from app.seed import ACTIVITY_COUNT, DEMO_PASSWORD
 
 
@@ -197,3 +205,65 @@ def test_seeded_admin_audit_queue_is_noisy_enough_to_be_useful(app, client, logi
     assert "人像摄影体验日" in html
     assert "天文观测夜" in html
     assert "提交人" in html
+
+
+def test_seed_writes_a_consistent_audit_trail(app):
+    """演示数据要带上审核日志，否则审核中心看起来是坏的。
+
+    种子是直接把活动建成「待审核 / 已驳回」这些状态的，绕过了真实的提交审核流程。
+    不补日志的话：待审核活动的「提交时间」显示成「—」，审核日志写着
+    「还没有任何审核记录」——明明有一场已驳回的活动。
+
+    这个缺陷是在浏览器里看审核中心截图时发现的，接口层断言抓不到：
+    页面 200、字段都在，只是那一格是空的。
+    """
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    with app.app_context():
+        logs = _db.session.execute(_db.select(AuditLog)).scalars().all()
+        assert logs, "审核日志一条都没有，审核中心会显示成空页面"
+
+        by_activity = {}
+        for entry in logs:
+            by_activity.setdefault(entry.activity_id, []).append(entry)
+
+        pendings = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.PENDING)
+        ).scalars().all()
+        assert pendings, "演示数据里应当有待审核的活动"
+        for activity in pendings:
+            actions = [e.action for e in by_activity.get(activity.id, [])]
+            assert AuditAction.SUBMIT in actions, (
+                f"{activity.title} 没有提交记录，审核中心的「提交时间」会是空的"
+            )
+
+        rejected = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.REJECTED)
+        ).scalar_one()
+        rejects = [e for e in by_activity[rejected.id] if e.action == AuditAction.REJECT]
+        assert rejects and rejects[0].reason, "驳回记录必须带原因，否则追溯不到为什么被拒"
+
+        draft = _db.session.execute(
+            _db.select(Activity).where(Activity.status == ActivityStatus.DRAFT)
+        ).scalar_one()
+        assert draft.id not in by_activity, "草稿没有任何流转，不该有日志"
+
+        # 日志时间必须都在「现在」之前：审核日志里出现未来时间会让人以为服务器时钟错了
+        for entry in logs:
+            assert entry.created_at <= utcnow() + timedelta(minutes=1), entry
+
+
+def test_seeded_audit_queue_shows_a_submit_time(app, client, login):
+    """页面上那一格不能再是「—」。"""
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    login("admin", password=DEMO_PASSWORD)
+    html = client.get("/admin/audit").get_data(as_text=True)
+
+    assert "还没有任何审核记录" not in html, "审核日志是空的"
+    # 「提交时间」后面紧跟一个日期，而不是破折号
+    assert "提交时间" in html
+    assert not re.search(r"提交时间\s*</dt>\s*<dd[^>]*>\s*—", html), (
+        "「提交时间」还是空的"
+    )
+

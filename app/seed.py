@@ -16,6 +16,8 @@ from .extensions import db
 from .models import (
     Activity,
     ActivityStatus,
+    AuditAction,
+    AuditLog,
     Category,
     Enrollment,
     EnrollStatus,
@@ -110,10 +112,67 @@ def seed_demo_data():
     admin = people["admin"]
     all_students = [people["20230101"], people["20230102"], people["20230103"], *extra]
 
+    def add_audit_trail(activity):
+        """按活动的**最终状态**倒推出「本来会留下」的审核日志。
+
+        为什么需要这个：演示数据是直接把活动建成「待审核」「已驳回」这些状态的，
+        绕过了真实的提交/审核流程，于是 AuditLog 一条都没有。表现是审核中心里
+        「提交时间」全是「—」、审核日志写着「还没有任何审核记录」——明明有一场
+        已驳回的活动。看着像审核功能没做，其实只是演示数据不完整。
+
+        轨迹规则（和真实流程一致）：
+        * 草稿：没有任何流转，不写；
+        * 管理员自己创建的活动：没有「提交审核」这一步（直接发布），不写提交；
+        * 其余：社团提交 → 管理员通过 / 驳回；已取消的再加一条取消。
+
+        时间刻意**排在当前时刻之前**：审核日志里出现未来时间会让人以为时钟错了。
+        """
+        def log(action, operator_id, reason=None, at=None):
+            db.session.add(
+                AuditLog(
+                    activity_id=activity.id,
+                    operator_id=operator_id,
+                    action=action,
+                    reason=reason,
+                    created_at=at or activity.created_at,
+                )
+            )
+
+        status = activity.status
+        if status == ActivityStatus.DRAFT:
+            return
+
+        # approved_at 在种子里只对「已发布」的活动设了，用它当审核时间更真实
+        decided_at = activity.approved_at or (activity.created_at - timedelta(days=1))
+        submitted_at = decided_at - timedelta(days=2)
+
+        by_admin = activity.organizer_id == admin.id
+        if not by_admin:
+            log(AuditAction.SUBMIT, activity.organizer_id, at=submitted_at)
+
+        if status == ActivityStatus.PENDING:
+            return
+
+        if status == ActivityStatus.REJECTED:
+            log(AuditAction.REJECT, admin.id, reason=activity.reject_reason, at=decided_at)
+            return
+
+        if not by_admin:
+            log(AuditAction.APPROVE, admin.id, at=decided_at)
+
+        if status == ActivityStatus.CANCELED:
+            log(
+                AuditAction.CANCEL,
+                activity.organizer_id,
+                reason="因天气原因取消",
+                at=decided_at + timedelta(hours=12),
+            )
+
     def add_activity(**kwargs):
         activity = Activity(**kwargs)
         db.session.add(activity)
         db.session.flush()
+        add_audit_trail(activity)
         return activity
 
     def enroll(activity, users, checked_in=0):
