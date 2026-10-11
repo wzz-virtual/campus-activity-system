@@ -7,8 +7,10 @@
 V2.0 的演示数据要点名覆盖三类平时很难自然出现的场景：
 
 * **满员 + 候补队列**（暗房冲洗体验）——演示「候补中 · 第 N 位」；
+* **满员 + 需审核**（胶片冲洗进阶班）——演示「通过 ≠ 一定参加」；
 * **需审核 + 待审核申请**（人像摄影体验日、天文观测夜）——演示逐人审核；
-* **被管理员下线的活动**（电竞友谊赛）——演示「处理标记」与学生端不可见。
+* **被管理员下线的活动**（电竞友谊赛）——演示「处理标记」与学生端不可见；
+* **五种报名状态同屏**（20230114 的「我的报名」）——一页看全 V2.0 的五态。
 """
 
 import re
@@ -110,6 +112,57 @@ def test_seeded_dataset_demos_waitlist_and_review_paths(app):
             )
         ).scalars().all()
         assert pending, "需审核的活动应当预置待审核申请，用于演示审核流程"
+
+
+def test_seeded_full_review_activity_demos_approve_then_waitlist(app):
+    """「胶片冲洗进阶班」：满员 + 需审核（TC-8 的演示场景）。
+
+    上限只有 3 人且已经满员——教师"通过"的那一刻没有余位，学生只能排进候补。
+    没有这个场景，"通过 ≠ 一定参加"就只能靠口头讲。
+    """
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    with app.app_context():
+        advanced = _db.session.execute(
+            _db.select(Activity).where(
+                Activity.title == "胶片冲洗进阶班（限 3 人 · 需审核）"
+            )
+        ).scalar_one()
+
+        assert advanced.requires_review is True
+        assert advanced.qualification
+        assert advanced.enrolled_count == advanced.capacity == 3, "这个演示场景必须是满员的"
+
+        pending = _db.session.execute(
+            _db.select(Enrollment).where(
+                Enrollment.activity_id == advanced.id,
+                Enrollment.status == EnrollStatus.PENDING,
+            )
+        ).scalars().all()
+        assert pending, "满员 + 待审核申请，才能演示「通过后进候补」"
+
+
+def test_seeded_demo_account_shows_all_five_enrollment_states(app):
+    """20230114 的「我的报名」要一页看全五种状态——V2.0 的重点展示对象。
+
+    正式 / 候补 / 待审核 / 已拒绝 / 已取消，五种状态同屏，不用来回切换账号。
+    """
+    app.test_cli_runner().invoke(args=["seed-demo"])
+
+    with app.app_context():
+        fan = _db.session.execute(
+            _db.select(User).where(User.student_no == "20230114")
+        ).scalar_one()
+        statuses = {
+            row.status
+            for row in _db.session.execute(
+                _db.select(Enrollment).where(Enrollment.user_id == fan.id)
+            ).scalars()
+        }
+
+    assert statuses == set(EnrollStatus.ALL), (
+        f"演示账号应当覆盖五种报名状态，实际只有：{sorted(statuses)}"
+    )
 
 
 def test_seeded_dataset_covers_plaza_and_interception_paths(app, client, login):

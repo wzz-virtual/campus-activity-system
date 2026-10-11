@@ -153,14 +153,14 @@ def test_student_can_enroll_and_cancel(live_server):
     assert "我的报名" in live_server.get("/my/enrollments")
 
     detail = live_server.get("/activities/1")
-    assert quota_of(detail) == (12, 30)
+    assert quota_of(detail) == (13, 30)
 
     live_server.post("/activities/1/enroll", {"csrf_token": csrf_of(detail)})
     after = live_server.get("/activities/1")
-    assert quota_of(after) == (13, 30), "报名后名额没有 +1"
+    assert quota_of(after) == (14, 30), "报名后名额没有 +1"
 
     live_server.post("/activities/1/unenroll", {"csrf_token": csrf_of(after)})
-    assert quota_of(live_server.get("/activities/1")) == (12, 30), "取消后名额没有回退"
+    assert quota_of(live_server.get("/activities/1")) == (13, 30), "取消后名额没有回退"
 
 
 def test_full_activity_gives_waitlist_over_real_http(live_server):

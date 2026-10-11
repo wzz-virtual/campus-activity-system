@@ -11,9 +11,13 @@
 出现的分支——它们是最需要人工确认的界面场景：
 
 * **满员 + 候补队列**（暗房冲洗体验）：演示「候补中 · 第 N 位」与队列顺序；
-* **需审核的活动 + 待审核申请**（人像摄影体验日、天文观测夜）：
+* **满员 + 需审核**（胶片冲洗进阶班）：「通过」那一刻没有余位，学生会直接排进候补
+  ——演示「通过 ≠ 一定参加」（TC-8）；
+* **需审核的活动 + 待审核申请**（人像摄影体验日、天文观测夜、胶片冲洗进阶班）：
   演示教师逐人审核、通过后按余位落位；
 * **被管理员下线的活动**（电竞友谊赛）：演示「下线 / 恢复」与学生端不可见；
+* **五种报名状态同屏**（用 20230114 登录看「我的报名」）：
+  正式 / 候补第 3 位 / 待审核 / 已拒绝 / 已取消；
 * **报名已截止**「进行中带签到码」（校运会摄影、书法体验课）。
 
 演示数据的时间都是「相对播种那一刻」算的，放着不动会逐天过期——
@@ -40,12 +44,12 @@ from .models import (
 DEMO_PASSWORD = "Campus-Demo-2026"
 
 # 演示账号
-# 名字保持 V1.0 时的原样（「网页里的数据不变」）：只有角色名从「社团」
-# 变成了「活动组织教师」，账号本身一个没动。
+# 角色已是 V2.0 的「活动组织教师」；名字按 V2.0 的角色设定为「X 老师」，
+# 这样在界面上一眼能看出教师身份（V1.0 时期叫「小张 / 小林 / 社团」）。
 DEMO_ACCOUNTS = [
     ("admin", "陈老师", Role.ADMIN, None),
-    ("club001", "小张", Role.TEACHER, "摄影协会"),
-    ("club002", "小林", Role.TEACHER, "天文社"),
+    ("club001", "张老师", Role.TEACHER, "摄影协会"),
+    ("club002", "林老师", Role.TEACHER, "天文社"),
     ("20230101", "李明", Role.STUDENT, None),
     ("20230102", "王芳", Role.STUDENT, None),
     ("20230103", "赵启", Role.STUDENT, None),
@@ -76,7 +80,7 @@ CATEGORIES = [
 
 # 播种出来的活动数量。写死成一个常量，是为了让「数据条数」这件事
 # 只有一处定义——测试会拿它做断言，改数据时不会两边对不上。
-ACTIVITY_COUNT = 11
+ACTIVITY_COUNT = 12
 
 # 演示用的「被下线」原因（TC-14 要求教师端能看到处理标记）
 OFFLINE_REASON = "活动时间与校历冲突，待与主办方核实后恢复"
@@ -120,6 +124,7 @@ def seed_demo_data():
         person.set_password(DEMO_PASSWORD)
         db.session.add(person)
         extra.append(person)
+        people[student_no] = person
     db.session.flush()
 
     teacher = people["club001"]  # 摄影协会
@@ -365,7 +370,27 @@ def seed_demo_data():
     )
     apply(starry, all_students[6:7])
 
-    # ⑧ 已下线 —— 管理员对违规活动的处理，学生端不可见（TC-14）
+    # ⑧ 满员 + 需审核 —— 演示「通过 ≠ 一定参加」（TC-8）：
+    #    上限只有 3 人且已经满员，教师审核"通过"的那一刻没有余位，
+    #    学生不会变成正式，而是直接排进候补队列。
+    advanced = add_activity(
+        title="胶片冲洗进阶班（限 3 人 · 需审核）",
+        category_id=categories["文体"].id,
+        organizer_id=teacher.id,
+        description="在暗房冲洗体验课的基础上，完成一轮从拍摄到成片的完整流程。",
+        start_time=now + timedelta(days=7),
+        end_time=now + timedelta(days=7, hours=3),
+        enroll_deadline=now + timedelta(days=6),
+        location="艺术楼 B1 暗房",
+        capacity=3,
+        requires_review=True,
+        qualification="已完成「暗房冲洗体验（小班）」或自备黑白胶卷；限 3 人。",
+        status=ActivityStatus.PUBLISHED,
+    )
+    enroll(advanced, [all_students[7], all_students[8], all_students[9]])
+    apply(advanced, [all_students[14], all_students[10]])
+
+    # ⑨ 已下线 —— 管理员对违规活动的处理，学生端不可见（TC-14）
     add_activity(
         offline_reason=OFFLINE_REASON,
         title="电竞友谊赛",
@@ -380,7 +405,7 @@ def seed_demo_data():
         status=ActivityStatus.OFFLINE,
     )
 
-    # ⑨ 已取消 —— 只读
+    # ⑩ 已取消 —— 只读
     add_activity(
         title="夏夜观星露营",
         category_id=categories["文体"].id,
@@ -394,7 +419,7 @@ def seed_demo_data():
         status=ActivityStatus.CANCELED,
     )
 
-    # ⑩ 管理员名下的活动（历史数据：V1.0 时期管理员可直接建活动）
+    # ⑪ 管理员名下的活动（历史数据：V1.0 时期管理员可直接建活动）
     add_activity(
         title="新生心理健康讲座",
         category_id=categories["讲座"].id,
@@ -406,6 +431,32 @@ def seed_demo_data():
         location="大礼堂",
         capacity=300,
         status=ActivityStatus.PUBLISHED,
+    )
+
+    # ⑫ 五种报名状态同屏的演示账号 —— 用 20230114（杨帆）登录看「我的报名」：
+    #    正式（手机摄影）/ 候补第 3 位（暗房）/ 待审核（人像摄影）/
+    #    已拒绝（天文观测夜）/ 已取消（校运会摄影志愿服务），一页看全。
+    fan = people["20230114"]
+    enroll(sharing, [fan])              # 正式：并入手机摄影的名单（计数同步推进）
+    apply(portrait, [fan])              # 待审核：人像摄影体验日的申请
+    db.session.add(
+        Enrollment(                     # 已拒绝：天文观测夜（带审核时间）
+            activity_id=starry.id,
+            user_id=fan.id,
+            status=EnrollStatus.REJECTED,
+            enrolled_at=now - timedelta(days=3),
+            reviewed_at=now - timedelta(days=2),
+            reviewed_by=other_teacher.id,
+        )
+    )
+    db.session.add(
+        Enrollment(                     # 已取消：校运会摄影（报名后在截止前退出）
+            activity_id=deadline_passed.id,
+            user_id=fan.id,
+            status=EnrollStatus.CANCELED,
+            enrolled_at=now - timedelta(days=6),
+            canceled_at=now - timedelta(days=5),
+        )
     )
 
     db.session.commit()
