@@ -21,12 +21,12 @@
 <form class="card mb-3" method="get" action="{{ url_for('activities.list_activities') }}">
   <div class="card-body">
     <div class="row g-2 align-items-end">
-      <div class="col-sm-5">
+      <div class="col-12 col-md-4">
         <label class="form-label small" for="f-keyword">关键词</label>
         <input class="form-control form-control-sm" id="f-keyword" name="keyword"
                value="{{ keyword }}" placeholder="标题 / 简介 / 地点">
       </div>
-      <div class="col-sm-3">
+      <div class="col-6 col-md-2">
         <label class="form-label small" for="f-category">分类</label>
         <select class="form-select form-select-sm" id="f-category" name="category">
           <option value="">全部分类</option>
@@ -36,8 +36,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-sm-2">
-        <label class="form-label small" for="f-status">状态</label>
+      <div class="col-6 col-md-2">
+        <label class="form-label small" for="f-status">活动状态</label>
         <select class="form-select form-select-sm" id="f-status" name="status">
           <option value="">全部状态</option>
           {% for value, label in [('PUBLISHED','报名中'), ('ONGOING','进行中'), ('FINISHED','已结束'), ('CANCELED','已取消')] %}
@@ -45,8 +45,31 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-sm-2 d-flex gap-2">
-        <button class="btn btn-sm btn-primary flex-fill" type="submit">筛选</button>
+      {# DR-7：按「报名状态」筛，和上面的活动状态不是一回事 #}
+      <div class="col-6 col-md-2">
+        <label class="form-label small" for="f-enroll-state">报名状态</label>
+        <select class="form-select form-select-sm" id="f-enroll-state" name="enroll_state">
+          <option value="">全部</option>
+          <option value="open" {{ 'selected' if enroll_state == 'open' }}>可报名</option>
+          <option value="waitlist" {{ 'selected' if enroll_state == 'waitlist' }}>已满 · 可候补</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small" for="f-date">日期</label>
+        <input class="form-control form-control-sm" type="date" id="f-date" name="date"
+               value="{{ current_date }}">
+      </div>
+    </div>
+    <div class="row g-2 align-items-center mt-2">
+      <div class="col-auto">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="f-weekend" name="weekend"
+                 value="1" {{ 'checked' if weekend }}>
+          <label class="form-check-label small" for="f-weekend">只看周末</label>
+        </div>
+      </div>
+      <div class="col-auto d-flex gap-2">
+        <button class="btn btn-sm btn-primary" type="submit">筛选</button>
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('activities.list_activities') }}">重置</a>
       </div>
     </div>
@@ -94,13 +117,21 @@
           {% endif %}
 
           <div class="small mb-3">
-            {# 决策所需的信息直接摆在卡片上：还能不能报名、是"可报名"还是
-               "已满员·可候补"、报名有没有截止。不要让学生点进去才发现报不上。
+            <span class="d-inline-flex flex-wrap align-items-center gap-2">
+              {# 决策所需的信息直接摆在卡片上：还能不能报名、是"可报名"还是
+                 "已满员·可候补"、报名有没有截止。不要让学生点进去才发现报不上。
 
-               这一行由 enroll_line 宏统一渲染，保证**永远有内容**——
-               之前这里把「剩余名额」和「截止提示」拼在一起、分隔符无条件渲染，
-               结果是每个还能报名的活动卡上都挂着一个孤零零的「·」。 #}
-            {{ m.enroll_line(activity, now) }}
+                 这一行由 enroll_line 宏统一渲染，保证**永远有内容**——
+                 之前这里把「剩余名额」和「截止提示」拼在一起、分隔符无条件渲染，
+                 结果是每个还能报名的活动卡上都挂着一个孤零零的「·」。 #}
+              <span>{{ m.enroll_line(activity, now) }}</span>
+              {# DR-12：热度标签，让学生不用点进详情就能判断「要不要挤这一场」 #}
+              {% set h = heat.get(activity.id) %}
+              {% if h and h.label %}
+                <span class="badge text-bg-{{ h.tone }}">{{ h.label }}</span>
+                {% if h.note %}<span class="text-secondary">{{ h.note }}</span>{% endif %}
+              {% endif %}
+            </span>
           </div>
 
           <div class="mt-auto d-flex align-items-center gap-2">
@@ -117,7 +148,9 @@
 {% if pagination.pages and pagination.pages > 1 %}
   <nav class="mt-4">
     <ul class="pagination pagination-sm justify-content-center mb-0">
-      {% set args = {'keyword': keyword, 'category': current_category or '', 'status': current_status} %}
+      {% set args = {'keyword': keyword, 'category': current_category or '', 'status': current_status,
+                     'date': current_date, 'weekend': 1 if weekend else '',
+                     'enroll_state': enroll_state} %}
       <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
         <a class="page-link" href="{{ url_for('activities.list_activities', page=pagination.prev_num, **args) }}">上一页</a>
       </li>

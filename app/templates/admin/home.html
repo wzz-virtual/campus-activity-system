@@ -63,5 +63,17 @@
       </div>
     </div>
   </div>
+
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 mb-2">运行指标</h2>
+        <p class="text-secondary small mb-3">
+          报名请求的耗时分布（P50 / P95 / P99、慢请求占比），用于观测报名高峰的表现（DR-5）。
+        </p>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.metrics_page') }}">查看</a>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}

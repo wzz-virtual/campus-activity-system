@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}运行指标 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-1">运行指标</h1>
+<p class="text-secondary small mb-4">
+  这里展示<strong>本进程</strong>最近 {{ stats.window }} 次报名请求的耗时分布，
+  用来观测报名高峰时的实际表现（DR-5）。
+</p>
+
+{% if stats.total == 0 %}
+  <div class="card mb-4">
+    <div class="card-body text-center py-5">
+      <p class="text-secondary mb-2">还没有采集到报名请求。</p>
+      <p class="text-secondary small mb-0">
+        去活动广场点一次「报名」再回到这里，就能看到本次请求的耗时。
+      </p>
+    </div>
+  </div>
+{% else %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <div class="text-secondary small">样本数</div>
+          <div class="display-6 fw-semibold">{{ stats.total }}</div>
+          <div class="small text-secondary">最近 {{ stats.window }} 次报名请求</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <div class="text-secondary small">P95 耗时</div>
+          <div class="display-6 fw-semibold">
+            {{ '%.0f'|format(stats.p95) }}<span class="fs-5 text-secondary"> ms</span>
+          </div>
+          <div class="small {% if stats.p95 <= 1000 %}text-success{% else %}text-danger{% endif %}">
+            目标 ≤ 1000 ms
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <div class="text-secondary small">慢请求占比（&gt; {{ stats.slow_ms }} ms）</div>
+          <div class="display-6 fw-semibold">
+            {{ '%.1f'|format(stats.slow_ratio * 100) }}<span class="fs-5 text-secondary">%</span>
+          </div>
+          <div class="small text-secondary">{{ stats.slow }} / {{ stats.total }} 次</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">耗时分布</h2>
+      <div class="table-responsive-sm">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>P50</th><th>P90</th><th>P95</th><th>P99</th><th>最大</th><th>业务失败</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ '%.0f'|format(stats.p50) }} ms</td>
+              <td>{{ '%.0f'|format(stats.p90) }} ms</td>
+              <td>{{ '%.0f'|format(stats.p95) }} ms</td>
+              <td>{{ '%.0f'|format(stats.p99) }} ms</td>
+              <td>{{ '%.0f'|format(stats.max) }} ms</td>
+              <td>{{ stats.errors }} 次</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="card">
+  <div class="card-body">
+    <h2 class="h6 mb-2">口径说明</h2>
+    <ul class="small text-secondary mb-0 ps-3">
+      <li>统计范围：报名接口（含正式 / 候补 / 待审核 / 重复提交）以及时间冲突确认页之前的判定耗时。</li>
+      <li>「慢请求」阈值 = {{ stats.slow_ms }} ms，与《实验3-需求分析》附录 B 的口径一致。</li>
+      <li><strong>纯内存统计</strong>：进程重启即清零，不落库、不持久化；样本只保留最近 {{ stats.window }} 条。</li>
+      <li>多进程部署时每个进程各算各的——演示站是单进程，直接可读。</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

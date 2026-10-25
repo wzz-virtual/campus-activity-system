@@ -62,8 +62,40 @@
         <div class="col-md-6">
           <label class="form-label" for="f-location">活动地点 <span class="req">*</span></label>
           <input class="form-control{{ invalid('location') }}" id="f-location" name="location"
-                 value="{{ raw.location }}" maxlength="150">
+                 value="{{ raw.location }}" maxlength="150"
+                 placeholder="例如：东校区 图书馆 302">
           {{ field_error('location') }}
+        </div>
+      </div>
+
+      {# DR-10：结构化地点。填了任意一个就自动拼成「活动地点」，
+         不填则用上面手填的地点——老活动编辑时不受影响。 #}
+      <div class="row g-2 mt-1">
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="f-campus">校区</label>
+          <input class="form-control form-control-sm" id="f-campus" name="campus"
+                 value="{{ raw.campus }}" maxlength="30" placeholder="东校区">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="f-building">建筑</label>
+          <input class="form-control form-control-sm" id="f-building" name="building"
+                 value="{{ raw.building }}" maxlength="40" placeholder="图书馆">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="f-room">房间</label>
+          <input class="form-control form-control-sm" id="f-room" name="room"
+                 value="{{ raw.room }}" maxlength="40" placeholder="302">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="f-location-note">补充说明</label>
+          <input class="form-control form-control-sm" id="f-location-note" name="location_note"
+                 value="{{ raw.location_note }}" maxlength="60" placeholder="如：从南门进">
+        </div>
+        <div class="col-12">
+          <div class="form-text">
+            填了上面任意一项，保存时会自动拼成「校区 + 建筑 + 房间（补充说明）」覆盖活动地点；
+            都不填则使用手填的活动地点。写清楚楼栋和房间，能少掉一半「找不到地方」的反馈。
+          </div>
         </div>
       </div>
 
@@ -120,6 +152,19 @@
         时间按本地时区（UTC+8）填写，入库统一转成 UTC 保存。结束时间必须晚于开始时间，
         报名截止时间不能晚于开始时间。
       </div>
+
+      {# DR-12：容量决策支持——同类活动的「正式 + 候补」人数参考 #}
+      {% if capacity_hints %}
+        <div class="alert alert-light border small mt-3 mb-0 py-2">
+          <strong>同类活动参考</strong>（按现有活动的「正式 + 候补」人数估算）：
+          {% for hint in capacity_hints %}
+            <span class="me-3 d-inline-block">
+              {{ hint.category }}：建议 {{ hint.low }} ~ {{ hint.high }} 人
+              <span class="text-secondary">（{{ hint.sample }} 场平均 {{ hint.average }} 人）</span>
+            </span>
+          {% endfor %}
+        </div>
+      {% endif %}
     </div>
   </div>
 

@@ -17,6 +17,7 @@ V2.0 的变化：
 * 名单页分成「待审核 / 正式 / 候补」三段。
 """
 
+import time
 from datetime import timedelta
 
 from flask import (
@@ -32,6 +33,7 @@ from flask import (
 from flask_login import current_user, login_required
 
 from .extensions import db
+from . import metrics
 from .models import (
     Activity,
     ActivityStatus,
@@ -47,12 +49,14 @@ from .services import (
     CHECK_IN_STATE_LABELS,
     CHECK_IN_STATE_STYLES,
     ENROLL_STATUS_STYLES,
+    activity_heat,
     activity_stats,
     cancel_activity as cancel_activity_service,
     cancel_blocked_reason,
     cancel_deadline_text,
     cancel_enrollment,
     can_edit_activity,
+    capacity_hints,
     check_in_by_code,
     check_in_state,
     collect_activity_form,
@@ -60,6 +64,7 @@ from .services import (
     enroll,
     enroll_allowed_reason,
     enroll_blocked_reason,
+    find_time_conflicts,
     latest_offline_record,
     latest_offline_records,
     open_check_in as open_check_in_service,
@@ -71,10 +76,11 @@ from .services import (
     set_check_in,
     validate_activity_form,
     waitlist_count,
+    waitlist_opportunity,
     waitlist_position,
     waitlist_query,
 )
-from .timeutils import format_local_input, utc_iso
+from .timeutils import format_local_input, parse_local, utc_iso
 
 bp = Blueprint("activities", __name__)
 
@@ -164,6 +170,12 @@ def list_activities():
     category_id = request.args.get("category", type=int)
     status = request.args.get("status") or ""
     keyword = (request.args.get("keyword") or "").strip()
+    # DR-7：日期 / 周末 / 报名状态三个新筛选
+    date_str = (request.args.get("date") or "").strip()
+    weekend = request.args.get("weekend") == "1"
+    enroll_state = request.args.get("enroll_state") or ""
+
+    now = utcnow()
 
     condition = db.select(Activity).where(
         Activity.status.in_(ActivityStatus.VISIBLE_TO_STUDENT)
@@ -184,6 +196,38 @@ def list_activities():
                 Activity.location.like(pattern),
             )
         )
+    if date_str:
+        # 按**本地日期**筛（库里存 UTC）。解析失败就当没填，不报错——
+        # 手改 URL 参数不该让整页 500。
+        try:
+            day_start = parse_local(f"{date_str} 00:00")
+        except ValueError:
+            day_start = None
+        if day_start is not None:
+            condition = condition.where(
+                Activity.start_time >= day_start,
+                Activity.start_time < day_start + timedelta(days=1),
+            )
+    if weekend:
+        # SQLite：把 UTC 转成本地（+8）再取星期几，0=周日、6=周六
+        weekday = db.func.strftime(
+            "%w", db.func.datetime(Activity.start_time, "+8 hours")
+        )
+        condition = condition.where(weekday.in_(("0", "6")))
+    if enroll_state == "open":
+        condition = condition.where(
+            Activity.status == ActivityStatus.PUBLISHED,
+            Activity.enroll_deadline > now,
+            Activity.enrolled_count < Activity.capacity,
+        )
+    elif enroll_state == "waitlist":
+        condition = condition.where(
+            Activity.status == ActivityStatus.PUBLISHED,
+            Activity.enroll_deadline > now,
+            Activity.enrolled_count >= Activity.capacity,
+        )
+    else:
+        enroll_state = ""
 
     # 默认按开始时间倒序：最新的活动排在前面
     pagination = db.paginate(
@@ -192,8 +236,6 @@ def list_activities():
         per_page=PAGE_SIZE,
         error_out=False,
     )
-
-    now = utcnow()
     activities = pagination.items
     my_enrollments = _my_enrollment_map([a.id for a in activities])
 
@@ -212,6 +254,12 @@ def list_activities():
         current_category=category_id,
         current_status=status,
         keyword=keyword,
+        # DR-7 的三个新筛选条件（回填到表单 / 分页链接）
+        current_date=date_str,
+        weekend=weekend,
+        enroll_state=enroll_state,
+        # DR-12：热度标签（填充率 + 余位口径）
+        heat={a.id: activity_heat(a, now) for a in activities},
         now=now,
         status_labels=ActivityStatus.LABELS,
     )
@@ -229,6 +277,8 @@ def _form_context(activity, raw, errors):
         "errors": errors,
         "categories": _categories(),
         "is_new": activity is None,
+        # DR-12：同类活动的容量参考，帮教师定人数上限
+        "capacity_hints": capacity_hints(),
     }
 
 
@@ -470,6 +520,14 @@ def activity_detail(activity_id):
         current_user.is_authenticated and activity.organizer_id == current_user.id
     )
 
+    # DR-11：只有「还能报名」时才需要算时间冲突，避免无谓查询
+    conflicts = []
+    if current_user.is_authenticated and can_enroll:
+        conflicts = find_time_conflicts(current_user.id, activity)
+
+    # DR-4：满员的活动才需要在报名区给「还值不值得等」的参考
+    opportunity = waitlist_opportunity(activity.id) if activity.is_full else None
+
     return render_template(
         "activities/detail.html",
         activity=activity,
@@ -496,6 +554,10 @@ def activity_detail(activity_id):
         else None,
         offinable_statuses=ActivityStatus.OFFINABLE,
         status_labels=ActivityStatus.LABELS,
+        # V3.0：时间冲突提示（DR-11）、候补机会参考（DR-4）、热度（DR-12）
+        conflicts=conflicts,
+        waitlist_opportunity=opportunity,
+        heat=activity_heat(activity, now),
         now=now,
     )
 
@@ -534,11 +596,35 @@ def cancel_activity(activity_id):
 @login_required
 def enroll_activity(activity_id):
     """报名。结果是哪一种（正式 / 候补 / 待审核），由业务层决定，
-    提示语直接用它返回的文案——三种结果的语气完全不同。"""
-    get_activity_or_404(activity_id)
+    提示语直接用它返回的文案——三种结果的语气完全不同。
+
+    V3.0 在这里补两件事：
+
+    * **DR-11 时间冲突二次确认**：与本人已有的正式活动同日 / 时间重叠时，
+      先返回确认页；用户点「仍然报名」（表单带 ``confirm=1``）才真正提交。
+      不强制拦截——冲突只是提示。
+    * **DR-5 指标采集**：记录本次报名请求的耗时，供管理端指标看板观测峰值。
+    """
+    started = time.perf_counter()
+    activity = get_activity_or_404(activity_id)
+
+    if request.form.get("confirm") != "1":
+        conflicts = find_time_conflicts(current_user.id, activity)
+        if conflicts:
+            return render_template(
+                "activities/conflict_confirm.html",
+                activity=activity,
+                conflicts=conflicts,
+            )
+
     ok, message = enroll(activity_id, current_user.id)
+    metrics.record((time.perf_counter() - started) * 1000, ok)
+
     if ok:
         flash(message, "success")
+    elif "无需重复提交" in message:
+        # DR-2：重复提交不是错误，别用警告色吓人
+        flash(message, "info")
     else:
         flash(message, "warning")
     return redirect(url_for("activities.activity_detail", activity_id=activity_id))

@@ -37,6 +37,7 @@ from .models import (
     User,
     utcnow,
 )
+from . import metrics
 from .permissions import role_required
 from .services import (
     latest_offline_records,
@@ -517,3 +518,21 @@ def reject_password_reset(request_id):
         flash("已标记为未通过。", "info")
 
     return redirect(url_for("admin.password_resets"))
+
+
+# ---------------------------------------------------------------------------
+# 运行指标（DR-5）
+# ---------------------------------------------------------------------------
+
+
+@bp.get("/metrics")
+@role_required(Role.ADMIN)
+def metrics_page():
+    """报名请求的耗时分布看板（DR-5）。
+
+    《实验3-需求分析》指出报名开放瞬间是性能瓶颈（P95 1555ms、
+    15.6% 请求 >1s），要求「监控看板可观测峰值指标」。这里展示的是
+    **本进程**最近 500 次报名请求的耗时分布——纯内存统计，重启即清零，
+    页面上有说明，不冒充持久化的监控系统。
+    """
+    return render_template("admin/metrics.html", stats=metrics.snapshot())

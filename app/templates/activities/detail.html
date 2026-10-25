@@ -137,10 +137,24 @@
 
         {% if enrollment.status == 'WAITLISTED' %}
           <div class="alert alert-warning small mb-2 py-2">
-            你在候补队列的<strong>第 {{ waitlist_position }} 位</strong>。
+            你在候补队列的<strong>第 {{ waitlist_position }} 位</strong>
+            {%- if waitlist_position and waitlist_position > 1 %}（前面还有 {{ waitlist_position - 1 }} 人）{%- endif %}。
             名额空出时按队列顺序<strong>自动递补</strong>，无需任何操作；
             也可以随时退出候补。队列顺序按进入候补的时间先到先得，任何角色都不能调整。
           </div>
+          {# DR-4：候补透明度——位次之外，再告诉用户「还值不值得等」 #}
+          {% if waitlist_opportunity %}
+            <div class="small mb-2">
+              候补机会参考：
+              <span class="badge text-bg-{{ waitlist_opportunity.tone }}">{{ waitlist_opportunity.label }}</span>
+              <span class="text-secondary">{{ waitlist_opportunity.note }}</span>
+              {% if waitlist_opportunity.rate is not none %}
+                <span class="text-secondary">
+                  · 转正率 {{ '%.0f'|format(waitlist_opportunity.rate * 100) }}%
+                </span>
+              {% endif %}
+            </div>
+          {% endif %}
         {% elif enrollment.status == 'PENDING' %}
           <div class="alert alert-info small mb-2 py-2">
             申请已提交，等待组织教师逐人确认。
@@ -200,7 +214,34 @@
         {% endif %}
 
         {% if can_enroll %}
-          <form method="post" action="{{ url_for('activities.enroll_activity', activity_id=activity.id) }}">
+          {# DR-11：提交前就把时间冲突说清楚，而不是等提交后才拦 #}
+          {% if conflicts %}
+            <div class="alert alert-info small mb-2 py-2">
+              <strong>时间冲突提醒</strong>：你已报名的
+              {% for c in conflicts -%}
+                「{{ c.activity.title }}」（{{ c.activity.start_time|localtime }}）{% if not loop.last %}、{% endif %}
+              {%- endfor %}
+              与这个活动{% if conflicts|selectattr('overlap')|list %}时间重叠{% else %}在同一天{% endif %}。
+              提交后会先请你确认一次，不会直接拦下。
+            </div>
+          {% endif %}
+
+          {# DR-4：满员的活动，报名前也给一份候补机会参考 #}
+          {% if activity.is_full and waitlist_opportunity %}
+            <div class="small text-secondary mb-2">
+              候补机会参考：
+              <span class="badge text-bg-{{ waitlist_opportunity.tone }}">{{ waitlist_opportunity.label }}</span>
+              {{ waitlist_opportunity.note }}
+              {% if waitlist_opportunity.rate is not none %}
+                <span class="text-secondary">
+                  · 转正率 {{ '%.0f'|format(waitlist_opportunity.rate * 100) }}%
+                </span>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          <form class="js-enroll-form" method="post"
+                action="{{ url_for('activities.enroll_activity', activity_id=activity.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             {% if enroll_action == 'apply' %}
               <button class="btn btn-primary" type="submit">提交报名申请</button>
@@ -368,4 +409,20 @@
     </div>
   </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // DR-2：提交后立刻禁用按钮并显示「处理中…」。
+  // 真实运行数据里 126 次重复提交的首次请求其实全部已经成功——
+  // 用户没看到即时反馈，就以为没点上，于是再点一次。
+  document.querySelectorAll("form.js-enroll-form").forEach(function (form) {
+    form.addEventListener("submit", function () {
+      var btn = form.querySelector('button[type="submit"]');
+      if (!btn || btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = "处理中…";
+    });
+  });
+</script>
 {% endblock %}

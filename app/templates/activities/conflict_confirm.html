@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}确认报名 · 校园活动管理系统{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <h1 class="h4 mb-1">确认报名</h1>
+    <p class="text-secondary small mb-3">
+      这个活动与你已经报名的活动时间冲突。这里只做提醒，<strong>不强制拦截</strong>——
+      确认后仍然可以报名。
+    </p>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h6 mb-2">本次要报名</h2>
+        <p class="mb-1"><strong>{{ activity.title }}</strong></p>
+        <div class="small text-secondary">
+          🕒 {{ activity.start_time|localtime('%Y-%m-%d %H:%M') }}
+          ~ {{ activity.end_time|localtime('%H:%M') }}
+          {% if activity.location %}· 📍 {{ activity.location }}{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3 border-warning">
+      <div class="card-body">
+        <h2 class="h6 mb-2 text-warning">冲突的已报名活动（{{ conflicts|length }}）</h2>
+        <ul class="mb-0 small">
+          {% for conflict in conflicts %}
+            <li class="mb-1">
+              <a class="link-dark"
+                 href="{{ url_for('activities.activity_detail', activity_id=conflict.activity.id) }}">
+                {{ conflict.activity.title }}
+              </a>
+              <span class="text-secondary">
+                · {{ conflict.activity.start_time|localtime('%Y-%m-%d %H:%M') }}
+                ~ {{ conflict.activity.end_time|localtime('%H:%M') }}
+                · {{ '时间重叠' if conflict.overlap else '同一天' }}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2">
+      <form method="post"
+            action="{{ url_for('activities.enroll_activity', activity_id=activity.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {# confirm=1 表示「用户已经看过冲突提示并决定继续」 #}
+        <input type="hidden" name="confirm" value="1">
+        <button class="btn btn-primary" type="submit">仍然报名</button>
+      </form>
+      <a class="btn btn-outline-secondary"
+         href="{{ url_for('activities.activity_detail', activity_id=activity.id) }}">返回活动详情</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

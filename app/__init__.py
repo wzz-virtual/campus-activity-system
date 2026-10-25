@@ -200,6 +200,27 @@ def create_app(config_name=None, **overrides):
             413,
         )
 
+    @app.errorhandler(500)
+    def internal_error(error):
+        """服务端错误兜底（DR-8）：给一个可读页面 + 重试入口，别甩白屏。
+
+        注意：DEBUG / 测试传播异常时不会走到这里，只有生产配置
+        （``deploy.py``，DEBUG=False）才真正生效。
+        """
+        # 出错时事务可能停在半途，先回滚，避免同一个连接把坏状态带给下一个请求
+        db.session.rollback()
+        if wants_json():
+            return jsonify(error="服务器开小差了，请重试"), 500
+        return (
+            render_template(
+                "errors/message.html",
+                code=500,
+                message="服务器开小差了，请稍后重试。如果反复失败，请把当前操作告诉管理员。",
+                retry=True,
+            ),
+            500,
+        )
+
     @app.context_processor
     def inject_globals():
         """注入所有模板都能用的变量。"""
