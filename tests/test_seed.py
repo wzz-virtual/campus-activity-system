@@ -374,9 +374,12 @@ def test_seed_creates_announcement_and_demo_mails(app, client, login):
         assert announcement.content == "", "公告默认不预置文案（用户要求首页不放说明文字）"
 
         messages = _db.session.execute(_db.select(Message)).scalars().all()
-        assert len(messages) == 2, "应当预置两封示例邮件"
+        manual = [m for m in messages if m.sender_id is not None]
+        notices = [m for m in messages if m.sender_id is None]
+        assert len(manual) == 2, "应当预置两封示例邮件"
+        assert len(notices) == 2, "V3.0 应当预置两条状态变更通知（DR-3）"
 
-        # 每个学生都收到两封未读
+        # 20230101：两封示例邮件 + 两条状态变更通知，全部未读
         someone = _db.session.execute(
             _db.select(User).where(User.student_no == "20230101")
         ).scalar_one()
@@ -390,13 +393,13 @@ def test_seed_creates_announcement_and_demo_mails(app, client, login):
                 )
             ).scalar_one()
         )
-        assert unread == 2
+        assert unread == 4
 
     # 登录学生账号：右上角邮件入口带未读角标
     login("20230101", password=DEMO_PASSWORD)
     dashboard = client.get("/dashboard").get_data(as_text=True)
     assert "邮件" in dashboard
-    assert '<span class="badge text-bg-danger">2</span>' in dashboard
+    assert '<span class="badge text-bg-danger">4</span>' in dashboard
 
     mail_page = client.get("/mail/").get_data(as_text=True)
     assert "本周活动安排提醒" in mail_page

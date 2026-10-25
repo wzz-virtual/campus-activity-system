@@ -102,7 +102,8 @@ def test_enroll_rejects_duplicate(client, login, csrf_token, student, teacher, a
 
     assert activity_state(activity.id).enrolled_count == 1
     assert len(enroll_rows(client.application, activity.id)) == 1
-    assert "你已经报名过这个活动了" in resp.get_data(as_text=True)
+    assert "你已报名成功" in resp.get_data(as_text=True)
+    assert "无需重复提交" in resp.get_data(as_text=True)
 
 
 def test_enroll_requires_login(client, csrf_token, student, teacher, activity_factory):

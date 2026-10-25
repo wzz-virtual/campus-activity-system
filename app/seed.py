@@ -83,7 +83,8 @@ CATEGORIES = [
 
 # 播种出来的活动数量。写死成一个常量，是为了让「数据条数」这件事
 # 只有一处定义——测试会拿它做断言，改数据时不会两边对不上。
-ACTIVITY_COUNT = 12
+# V3.0：12 → 13（新增「摄影后期工作坊」，用于候补转正率与时间冲突演示）
+ACTIVITY_COUNT = 13
 
 # 演示用的「被下线」原因（TC-14 要求教师端能看到处理标记）
 OFFLINE_REASON = "活动时间与校历冲突，待与主办方核实后恢复"
@@ -436,6 +437,42 @@ def seed_demo_data():
         status=ActivityStatus.PUBLISHED,
     )
 
+    # ⑭ V3.0：候补转正历史 + 时间冲突演示
+    #    - 满员（6 / 6），其中 2 人是「候补转正」进来的
+    #      （waitlisted_at + promoted_at 都有值），另外 2 人还在候补队列里
+    #      → 转正率 2 / 4 = 50%，展示 DR-4 的「机会较大」；
+    #    - 与「手机摄影技巧分享会」同一天，20230101 已经报了那一场，
+    #      再来报名这一场会触发 DR-11 的时间冲突二次确认。
+    later = add_activity(
+        title="摄影后期工作坊",
+        category_id=categories["文体"].id,
+        organizer_id=teacher.id,
+        description="讲 Lightroom 的基础调色与输出，自带笔记本电脑更佳。",
+        start_time=now + timedelta(days=3, hours=3),
+        end_time=now + timedelta(days=3, hours=6),
+        enroll_deadline=now + timedelta(days=2, hours=6),
+        location="传媒楼 302",
+        capacity=6,
+        status=ActivityStatus.PUBLISHED,
+    )
+    # 直接报名进来的 4 人（刻意不含 20230101，把这一场留给时间冲突演示）
+    enroll(later, all_students[3:7])
+    # 曾经候补、后被自动递补转正的人：保留 waitlisted_at 作为「候补历史」
+    for index, person in enumerate(all_students[10:12]):
+        db.session.add(
+            Enrollment(
+                activity_id=later.id,
+                user_id=person.id,
+                status=EnrollStatus.CONFIRMED,
+                enrolled_at=now - timedelta(days=1, hours=6),
+                waitlisted_at=now - timedelta(days=1, hours=4 - index),
+                promoted_at=now - timedelta(hours=20 + index),
+            )
+        )
+        later.enrolled_count += 1
+    # 现在还在排队的 2 人
+    waitlist(later, all_students[8:10])
+
     # ⑫ 五种报名状态同屏的演示账号 —— 用 20230114（杨帆）登录看「我的报名」：
     #    正式（手机摄影）/ 候补第 3 位（暗房）/ 待审核（人像摄影）/
     #    已拒绝（天文观测夜）/ 已取消（校运会摄影志愿服务），一页看全。
@@ -498,6 +535,34 @@ def seed_demo_data():
         admin,
     )
 
+    # V3.0（DR-3）：站内通知演示——系统消息的 sender_id 为空，收件箱显示「系统」。
+    # 给演示学生 20230101 造两条状态变更通知，登录后右上角就能看到未读角标。
+    def notify(person, subject, body, minutes_ago=60):
+        message = Message(
+            sender_id=None,
+            subject=subject,
+            body=body,
+            created_at=now - timedelta(minutes=minutes_ago),
+        )
+        db.session.add(message)
+        db.session.flush()
+        db.session.add(MessageRecipient(message_id=message.id, user_id=person.id))
+        return message
+
+    notify(
+        people["20230101"],
+        "候补转正：摄影后期工作坊",
+        "你报名的《摄影后期工作坊》有名额空出，状态已从「候补」变为「正式」。"
+        "请按活动时间准时参加。",
+        minutes_ago=90,
+    )
+    notify(
+        people["20230101"],
+        "审核通过：人像摄影体验日",
+        "你报名《人像摄影体验日》的申请已通过，并已获得正式名额。",
+        minutes_ago=200,
+    )
+
     db.session.commit()
 
     return {
@@ -505,4 +570,6 @@ def seed_demo_data():
         "users": len(DEMO_ACCOUNTS) + len(EXTRA_STUDENTS),
         "activities": ACTIVITY_COUNT,
         "messages": 2,
+        # V3.0：状态变更通知（系统消息）条数
+        "notices": 2,
     }
