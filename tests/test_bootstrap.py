@@ -72,6 +72,32 @@ def test_prepare_database_leaves_existing_data_alone(app, user_factory, mutate):
         ).scalar_one_or_none() is not None, "新加的账号被清掉了"
 
 
+def test_prepare_database_force_reseed_rebuilds_data(app, mutate):
+    """force_reseed=True：即使库里有数据，也清空重播一份新鲜的演示数据。
+
+    线上部署入口用它（deploy.py），保证每次启动线上都是「相对当下时刻」的
+    新鲜演示场景，而不是放了几周、满屏「已结束」的陈旧数据。
+    """
+    prepare_database(app)
+
+    with app.app_context():
+        someone_id = _db.session.execute(
+            _db.select(User.id).where(User.student_no == "20230101")
+        ).scalar_one()
+
+    # 模拟「上线之后有人动过数据」：改个名字
+    mutate(lambda session: setattr(session.get(User, someone_id), "name", "被改过的名字"))
+
+    summary = prepare_database(app, force_reseed=True)
+
+    assert summary is not None
+    assert summary["activities"] == ACTIVITY_COUNT
+
+    with app.app_context():
+        assert count(User) == 18, "重播后账号数应当回到演示数据的 18 个"
+        assert _db.session.get(User, someone_id).name != "被改过的名字", "线上改动应当被重播清掉"
+
+
 def test_prepare_database_creates_tables_first(app):
     """表还不存在时也要能跑通（真实场景就是「实例刚起、库文件还不存在」）。"""
     with app.app_context():
