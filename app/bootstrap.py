@@ -1,12 +1,17 @@
 """线上启动时的数据库准备。
 
 线上沙箱里没有运维来跑 ``init-db`` / ``seed-demo`` / ``upgrade-v2``，
-所以把这几步并进启动流程：**建表 → 迁移 → 空库才播种**。
+所以把这几步并进启动流程：**建表 → 迁移 → 播种**。
 
-**为什么是「空库才播种」而不是每次都重置**：无条件重置的话，线上沙箱重启一次
-（或有人重新发布一次）就会把用户刚建的活动、刚报的名全部清掉——演示站看起来
-就是「数据莫名消失」。只在空库时播种，既有开箱可用的演示数据，又不会中途把
-别人的操作抹掉。
+播种策略分两种：
+
+* 默认（本地 / 通用）：**空库才播种**——库里已有数据就不动，避免把真实数据
+  （用户刚建的活动、刚报的名）覆盖掉。
+* ``force_reseed=True``（线上部署入口）：**每次启动都清空重播**一份新鲜演示数据。
+  演示数据里的时间都是「相对播种那一刻」算的，放着不动会逐天过期（页面上只剩
+  「已结束」「报名已截止」，看着像功能坏了）；每次启动重播，线上就永远是
+  最新的、可完整体验的演示场景。代价是访问者在线上产生的改动会被清掉——
+  演示站可接受，且线上只放演示数据、不放真实学生信息。
 """
 
 from .extensions import db
@@ -23,16 +28,25 @@ def database_is_empty():
     ).scalar_one()
 
 
-def prepare_database(app):
-    """建表；旧库先迁移到 V2.0；空库则铺一份演示数据。
+def prepare_database(app, force_reseed=False):
+    """建表；旧库先迁移到 V2.0；按策略播种。
 
-    :return: 播种摘要，或 ``None``（库里已有数据，未改动）
+    :param force_reseed: True 时**清空全部数据表再播种**（线上每次启动重播）；
+         False（默认）时只在空库播种，已有数据不动。
+    :return: 播种摘要，或 ``None``（库里已有数据、且非 force_reseed，未改动）
     """
     with app.app_context():
-        db.create_all()
+        if force_reseed:
+            # 清空重播：drop_all 按依赖顺序删表，再 create_all 建出全新表，
+            # 之后 database_is_empty() 必为真、直接进 seed_demo_data()。
+            db.drop_all()
+            db.create_all()
+        else:
+            db.create_all()
 
         # V1.0 的老库（线上沙箱里可能就躺着一个）：先把结构和取值迁移到
         # V2.0，再让应用跑起来。迁移是幂等的，每次启动查一下不花什么成本。
+        # （force_reseed 走的是全新库，这一分支自然跳过。）
         if schema_needs_upgrade():
             notes = upgrade_to_v2()
             for note in notes:
@@ -48,7 +62,8 @@ def prepare_database(app):
             return None
         summary = seed_demo_data()
         app.logger.info(
-            "空库已初始化：%s 个分类 / %s 个账号 / %s 场活动（演示密码 %s）",
+            "%s：%s 个分类 / %s 个账号 / %s 场活动（演示密码 %s）",
+            "已重播演示数据" if force_reseed else "空库已初始化",
             summary["categories"], summary["users"], summary["activities"],
             DEMO_PASSWORD,
         )

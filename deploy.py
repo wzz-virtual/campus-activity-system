@@ -7,11 +7,12 @@
 * **用生产配置**（``FLASK_CONFIG=prod``）：关掉 DEBUG。这一点是硬要求——
   开发配置会打开 Werkzeug 的交互式调试控制台，那东西放在公网上等于把
   任意代码执行的能力开放给所有人。
-* **启动时自己建表并铺演示数据**（见 ``app/bootstrap.py``）。沙箱里没有运维
-  去跑 ``init-db`` / ``seed-demo``。
-* **数据库单独一个文件**（``instance/live.db``），和本地开发用的
-  ``instance/campus.db`` 分开：这样线上不会被本地那份「已经放了三周的旧数据」
-  污染，本地调试也不会误改线上数据。
+* **启动时自己建表并重播演示数据**（见 ``app/bootstrap.py``，``force_reseed=True``）。
+  沙箱里没有运维去跑 ``init-db`` / ``seed-demo``；每次启动重播，线上演示数据
+  永远是「相对当下时刻」的新鲜状态，不会逐天过期。
+* **数据库单独一个文件**（``instance/live-v2.db``），和本地开发用的
+  ``instance/campus.db`` 分开：这样线上不会被本地那份旧数据污染，
+  本地调试也不会误改线上数据。
 
 启动::
 
@@ -41,10 +42,9 @@ def configure_environment():
     os.environ.setdefault("FLASK_CONFIG", "prod")
     os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
     # V2.0 起库文件叫 live-v2.db（不再是 live.db）。
-    # 原因：沙箱里可能躺着一个 V1.0 的老库，启动时的迁移只会"翻译"它
-    # （CLUB→TEACHER 等），不会补上候补队列、待审核申请这些 V2.0 的演示场景——
-    # 换一个新文件名，让沙箱开出来就是一份完整的 V2.0 演示数据。
-    # 之后库文件保持不动，重启 / 重新发布都不会清掉访问者产生的数据。
+    # 原因：沙箱里可能躺着一个 V1.0 的老库；换一个新文件名，让沙箱
+    # 开出来就是一份完整的 V2.0 演示数据。启动时会 force_reseed 重播，
+    # 所以这个文件的内容每次启动都会被刷新成最新的演示数据。
     os.environ.setdefault(
         "DATABASE_URL",
         "sqlite:///" + os.path.join(BASE_DIR, "instance", "live-v2.db").replace("\\", "/"),
@@ -71,10 +71,10 @@ def build_app():
         os.environ.get("SESSION_COOKIE_SECURE", "1") != "0"
     )
 
-    summary = prepare_database(application)
+    summary = prepare_database(application, force_reseed=True)
     if summary:
         print(
-            f"[启动] 空库已初始化：{summary['categories']} 个分类、"
+            f"[启动] 已重播演示数据：{summary['categories']} 个分类、"
             f"{summary['users']} 个账号、{summary['activities']} 场活动"
         )
     else:
