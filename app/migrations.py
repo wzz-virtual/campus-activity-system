@@ -38,6 +38,8 @@ NEW_COLUMNS = {
         # 不加 REFERENCES 子句：SQLite 对 ALTER TABLE ADD COLUMN 带外键约束
         # 有额外限制，而这条约束对运行期查询没有影响（fresh 库由 create_all 建全）。
         ("reviewed_by", "INTEGER"),
+        # V3.0（DR-4）：候补转正时刻，用于统计候补转正率
+        ("promoted_at", "DATETIME"),
     ],
 }
 
@@ -62,12 +64,24 @@ def _columns(connection, table):
 
 
 def schema_needs_upgrade():
-    """当前数据库是否还是 V1.0 结构（缺 V2.0 的新列）。"""
+    """当前数据库是否缺少模型需要的新列（V1.0 / V2.0 的老库都算）。
+
+    不只看 ``activity.requires_review``：V3.0 又给 ``enrollment`` 加了
+    ``promoted_at``，已经升到 V2.0 的库同样要再补一次。改成逐表逐列核对，
+    以后再添列只要往 ``NEW_COLUMNS`` 里写一行就够了。
+    """
     with db.engine.connect() as connection:
         tables = _table_names(connection)
         if "activity" not in tables:
             return False  # 还没有表——交给 create_all 按新模型建
-        return "requires_review" not in _columns(connection, "activity")
+        for table, columns in NEW_COLUMNS.items():
+            if table not in tables:
+                continue
+            existing = _columns(connection, table)
+            for name, _ddl in columns:
+                if name not in existing:
+                    return True
+        return False
 
 
 def upgrade_to_v2():

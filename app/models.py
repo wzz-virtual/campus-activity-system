@@ -414,7 +414,12 @@ class Enrollment(db.Model):
     # 报名（提交申请）的时刻。重新报名时更新为新一轮的时间。
     enrolled_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     # 进入候补队列的时刻。**候补排序的唯一依据**，只在状态变为候补时写入。
+    # V3.0 起它同时是「候补历史」的痕迹：退出候补 / 转正后都不再清空
+    # （队列查询按 status 过滤，不受影响），用于统计该活动的候补转正率（DR-4）。
     waitlisted_at = db.Column(db.DateTime)
+    # V3.0（DR-4）：候补转正式的时刻。NULL = 从没经历过「候补→正式」。
+    # 直接报名就转正式的不算（没有"候补"这段经历）。
+    promoted_at = db.Column(db.DateTime)
     # 教师审核的时刻与操作人（仅"需审核的活动"会填写）
     reviewed_at = db.Column(db.DateTime)
     reviewed_by = db.Column(db.Integer, db.ForeignKey("user.id"))

@@ -1,4 +1,4 @@
-"""业务规则层（V2.0）。
+"""业务规则层（V3.0）。
 
 把规则集中在这里、而不是散落在各个视图里，有三个理由：
 
@@ -17,7 +17,15 @@ V2.0 的核心是三件事（出处：《实验2-需求分析.md》）：
 * **容量硬约束**（BR-1）——任何操作之后，「正式人数 ≤ 上限」都必须成立，
   包括两个人同时抢最后一个名额的时刻。
 
-报名的五态流转见 `models.EnrollStatus`；状态机图见需求分析第七章。
+V3.0 在保留上面全部能力的前提下，按《实验3-需求分析.md》的 DR 编号补三组能力：
+
+* **三个闭环**：满员必进候补且文案可读（DR-1）、提交必有回执且防重复（DR-2）、
+  状态变更必达站内通知（DR-3）；
+* **透明度与实时性**：候补位次 + 转正率 + 机会标签（DR-4），
+  取消 → 递补本来就是同事务同步完成（DR-6，V2.0 已满足）；
+* **体验与决策支持**：时间冲突提示（DR-11）、活动热度与容量建议（DR-12）。
+
+报名的五态流转见 `models.EnrollStatus`；状态机图见 V2.0 需求分析第七章。
 """
 
 import secrets
@@ -31,11 +39,15 @@ from .models import (
     ActivityStatus,
     AuditAction,
     AuditLog,
+    Category,
     EnrollStatus,
     Enrollment,
+    Message,
+    MessageRecipient,
+    User,
     utcnow,
 )
-from .timeutils import parse_local
+from .timeutils import format_local, parse_local
 
 # ---------------------------------------------------------------------------
 # 业务常量：调规则只改这里
@@ -291,6 +303,11 @@ ACTIVITY_FORM_FIELDS = (
     "end_time",
     "enroll_deadline",
     "location",
+    # DR-10：结构化地点（选填；填了任意一个就自动拼进 location）
+    "campus",
+    "building",
+    "room",
+    "location_note",
     "capacity",
     "qualification",
 )
@@ -303,6 +320,10 @@ FIELD_LABELS = {
     "end_time": "结束时间",
     "enroll_deadline": "报名截止时间",
     "location": "活动地点",
+    "campus": "校区",
+    "building": "建筑",
+    "room": "房间",
+    "location_note": "地点补充说明",
     "capacity": "人数上限",
     "qualification": "参加资格说明",
 }
@@ -357,9 +378,25 @@ def validate_activity_form(raw, valid_category_ids, capacity_floor=0):
     # 简介是纯文本，不做富文本编辑器
     parsed["description"] = raw["description"] or None
 
-    location = raw["location"]
+    # DR-10：结构化地点。校区 / 建筑 / 房间填了**任意一个**，就用它拼出
+    # location；一个都没填则退回手填的「活动地点」——老活动（只有 location）
+    # 完全不受影响，新发布的活动又会被引导写清「在哪栋楼、哪间房」。
+    campus = raw.get("campus", "")
+    building = raw.get("building", "")
+    room = raw.get("room", "")
+    note = raw.get("location_note", "")
+    structured = "".join(part for part in (campus, building, room) if part)
+    if structured:
+        location = structured
+        if note:
+            location = f"{location}（{note}）"
+    else:
+        location = raw["location"]
+        if note:
+            location = f"{location}（{note}）" if location else note
+
     if not location:
-        errors["location"] = "活动地点不能为空"
+        errors["location"] = "活动地点不能为空（可填校区 / 建筑 / 房间，或直接填写详细地点）"
     elif len(location) > LOCATION_MAX_LENGTH:
         errors["location"] = f"活动地点不能超过 {LOCATION_MAX_LENGTH} 字"
     else:
@@ -436,6 +473,33 @@ def edit_blocked_reason(user, activity):
     if activity.status not in EDITABLE_STATUSES:
         return f"活动处于「{activity.status_label}」，信息已锁定，不可再修改"
     return None
+
+
+# ---------------------------------------------------------------------------
+# 状态变更通知（DR-3）
+# ---------------------------------------------------------------------------
+
+
+def notify_user(user_id, subject, body):
+    """给一个人发一条站内通知（系统消息，``sender_id`` 留空）。
+
+    复用 V2.0 的站内邮件表：``Message.sender_id`` 允许为空，收件箱里就显示成
+    「系统」。这样不用另建一套消息中心，未读角标、已读状态、详情页全都直接复用。
+
+    ⚠️ **本函数不提交事务**——通知必须和触发它的状态变更在同一个事务里落地，
+    否则会出现「状态改了但没通知」或「通知了但状态没改」的不一致。
+    调用方负责 ``db.session.commit()``。
+    """
+    message = Message(sender_id=None, subject=subject, body=body)
+    db.session.add(message)
+    db.session.flush()
+    db.session.add(MessageRecipient(message_id=message.id, user_id=user_id))
+    return message
+
+
+def _activity_title(activity_id):
+    activity = db.session.get(Activity, activity_id)
+    return activity.title if activity is not None else "活动"
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +603,8 @@ def _write_application(existing, activity_id, user_id, status, now):
     existing.check_in_at = None
     existing.check_in_by = None
     existing.waitlisted_at = now if status == EnrollStatus.WAITLISTED else None
+    # 重新报名是「新一轮」：上一轮是否候补转正过，不能带到这一轮来。
+    existing.promoted_at = None
 
     db.session.flush()  # 让紧接着的排位查询能看到这一行
     if status == EnrollStatus.WAITLISTED:
@@ -564,8 +630,20 @@ def enroll(activity_id, user_id):
 
     existing = _find_enrollment(activity_id, user_id)
     if existing is not None and existing.is_active:
-        # 这只是为了给出更准确的提示语，真正的防重仍然靠唯一索引
-        return False, f"你已经报名过这个活动了（当前状态：{existing.status_label}）"
+        # DR-2：重复提交**不是错误**。把「已经成功 + 当前状态」直接说清楚，
+        # 用户才不会以为没提交上、再点一次（真实数据里 126 次重复提交，
+        # 首次请求全部已经成功，就是提示语没讲明白造成的）。
+        # 真正的防重仍然靠唯一索引兜底。
+        if existing.status == EnrollStatus.CONFIRMED:
+            return False, "你已报名成功（当前状态：正式名额），无需重复提交。"
+        if existing.status == EnrollStatus.WAITLISTED:
+            position = waitlist_position(existing)
+            return False, f"你已在候补队列中（第 {position} 位），无需重复提交。"
+        return (
+            False,
+            f"你的报名申请已提交（当前状态：{existing.status_label}），"
+            "正在等待组织教师审核，无需重复提交。",
+        )
 
     activity = db.session.get(Activity, activity_id)
     if activity is None:
@@ -582,7 +660,7 @@ def enroll(activity_id, user_id):
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            return False, "你已经报名过这个活动了"
+            return False, "你已报名过这个活动（可能是重复提交），当前状态请到「我的报名」确认。"
         return True, "报名申请已提交，等待组织教师审核确认。"
 
     # ---- 无需审核：先抢名额，抢不到就是候补 ----
@@ -596,7 +674,7 @@ def enroll(activity_id, user_id):
             # 并发双提交时必然有一个走到这里。回滚会把上面那句 UPDATE 的扣减
             # 一并撤销，名额不会被白扣。
             db.session.rollback()
-            return False, "你已经报名过这个活动了"
+            return False, "你已报名过这个活动（可能是重复提交），当前状态请到「我的报名」确认。"
         return True, "报名成功，名额已为你保留。"
 
     # 占位失败：要么满员，要么通道刚刚关闭。回滚掉没生效的 UPDATE，再问清原因。
@@ -613,7 +691,7 @@ def enroll(activity_id, user_id):
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        return False, "你已经报名过这个活动了"
+        return False, "你已报名过这个活动（可能是重复提交），当前状态请到「我的报名」确认。"
     return True, f"名额已满，已进入候补队列（当前第 {position} 位）。"
 
 
@@ -698,6 +776,7 @@ def promote_waitlist(activity_id, now=None):
     """
     now = now or utcnow()
     promoted = []
+    title = _activity_title(activity_id)
     while True:
         head = (
             db.session.execute(waitlist_query(activity_id).limit(1))
@@ -709,10 +788,187 @@ def promote_waitlist(activity_id, now=None):
         if db.session.execute(_take_slot(activity_id, now, check_deadline=False)).rowcount != 1:
             break  # 没余位了（或活动已不在可报状态），停
         head.status = EnrollStatus.CONFIRMED
+        # V3.0（DR-4）：记下「候补 → 正式」的时刻，供转正率统计
+        head.promoted_at = now
         # waitlisted_at 保留：它记录的是「曾经什么时候排进队列」的历史，
         # 状态已是正式，不会再出现在候补队列的任何查询里。
+        # DR-3：转正是用户最需要被主动告知的一次状态变化
+        notify_user(
+            head.user_id,
+            f"候补转正：{title}",
+            f"你报名的《{title}》有名额空出，状态已从「候补」变为「正式」。"
+            f"变更时间：{now:%Y-%m-%d %H:%M}（UTC）。请按活动时间准时参加。",
+        )
         promoted.append(head.user_id)
     return promoted
+
+
+def waitlist_opportunity(activity_id):
+    """该活动的候补转正参考（DR-4）：位次之外，再告诉用户「还值不值得等」。
+
+    口径（可复算，分母写清楚）：
+
+    * **候补总数** = 曾进入候补的记录数（``waitlisted_at`` 不为空，
+      含已退出、已转正、已取消的历史）；
+    * **转正数** = 其中 ``promoted_at`` 不为空的记录数；
+    * **转正率** = 转正数 / 候补总数。
+
+    样本太少（候补总数 < 3）时不报比例——"1/1 = 100%" 只会误导，
+    这时显示「暂无参考」。
+
+    :return: dict(total, promoted, rate, label, tone, note)
+    """
+    total = db.session.execute(
+        db.select(db.func.count())
+        .select_from(Enrollment)
+        .where(
+            Enrollment.activity_id == activity_id,
+            Enrollment.waitlisted_at.is_not(None),
+        )
+    ).scalar_one()
+    promoted = db.session.execute(
+        db.select(db.func.count())
+        .select_from(Enrollment)
+        .where(
+            Enrollment.activity_id == activity_id,
+            Enrollment.promoted_at.is_not(None),
+        )
+    ).scalar_one()
+
+    if total < 3:
+        return {
+            "total": total,
+            "promoted": promoted,
+            "rate": None,
+            "label": "暂无参考",
+            "tone": "secondary",
+            "note": "这个活动的候补样本还不够，暂时无法估计机会大小",
+        }
+
+    rate = promoted / total
+    if rate >= 0.5:
+        label, tone = "机会较大", "success"
+    elif rate >= 0.2:
+        label, tone = "有机会", "warning"
+    else:
+        label, tone = "机会较小", "danger"
+    return {
+        "total": total,
+        "promoted": promoted,
+        "rate": rate,
+        "label": label,
+        "tone": tone,
+        "note": f"历史候补 {total} 人，其中 {promoted} 人等到名额",
+    }
+
+
+def find_time_conflicts(user_id, activity):
+    """报名前的站内时间冲突检测（DR-11）。
+
+    只查「本人已正式报名（CONFIRMED）」的活动：
+    **时间区间重叠**或**同一天**都算冲突，返回冲突活动与是否真的重叠。
+
+    不做强制拦截——冲突只是提示，学生二次确认后仍可提交（要求里明确
+    "需二次确认后才可提交，不做强制拦截"）。
+    """
+    candidates = (
+        db.session.execute(
+            db.select(Activity)
+            .join(Enrollment, Enrollment.activity_id == Activity.id)
+            .where(
+                Enrollment.user_id == user_id,
+                Enrollment.status == EnrollStatus.CONFIRMED,
+                Activity.id != activity.id,
+                Activity.status.in_(ActivityStatus.VISIBLE_TO_STUDENT),
+            )
+            .order_by(Activity.start_time)
+        )
+        .scalars()
+        .all()
+    )
+
+    mine_day = format_local(activity.start_time, "%Y-%m-%d")
+    conflicts = []
+    for other in candidates:
+        overlap = other.start_time < activity.end_time and other.end_time > activity.start_time
+        same_day = format_local(other.start_time, "%Y-%m-%d") == mine_day
+        if overlap or same_day:
+            conflicts.append({"activity": other, "overlap": overlap})
+    return conflicts
+
+
+def activity_heat(activity, now=None):
+    """活动热度标签（DR-12）：让学生在列表页就能判断「要不要挤这一场」。
+
+    口径只看**填充率与余位**（可解释、可复算，不依赖假设的历史申请量）：
+
+    * 已满员 → 「已满员」+ 候补人数
+    * 余位 ≤ 20% → 「即将满员」
+    * 已报名 ≥ 50% → 「较热」
+    * 其余 → 「一般」
+
+    :return: dict(label, tone, note)
+    """
+    if activity.capacity <= 0:
+        return {"label": "一般", "tone": "light", "note": ""}
+    if activity.is_full:
+        waiting = waitlist_count(activity.id)
+        note = f"{waiting} 人候补" if waiting else "可候补"
+        return {"label": "已满员", "tone": "danger", "note": note}
+
+    fill = activity.enrolled_count / activity.capacity
+    if fill >= 0.8:
+        return {"label": "即将满员", "tone": "warning", "note": f"余 {activity.remaining} 位"}
+    if fill >= 0.5:
+        return {"label": "较热", "tone": "warning", "note": f"余 {activity.remaining} 位"}
+    return {"label": "一般", "tone": "light", "note": f"余 {activity.remaining} 位"}
+
+
+def capacity_advice(category_id, exclude_activity_id=None):
+    """同类活动的容量参考（DR-12）：教师设上限时的历史依据。
+
+    需求近似口径：``正式人数 + 当前候补人数``（候补也是真实需求，
+    只算正式人数会低估）。样本不足 2 个活动时返回 ``None``，不硬给建议。
+
+    :return: dict(sample, average, low, high) 或 None
+    """
+    if not category_id:
+        return None
+
+    query = db.select(Activity).where(Activity.category_id == category_id)
+    if exclude_activity_id is not None:
+        query = query.where(Activity.id != exclude_activity_id)
+    activities = db.session.execute(query).scalars().all()
+    if len(activities) < 2:
+        return None
+
+    demands = [a.enrolled_count + waitlist_count(a.id) for a in activities]
+    average = sum(demands) / len(demands)
+    return {
+        "sample": len(demands),
+        "average": round(average),
+        "low": max(1, int(average * 0.8)),
+        "high": max(1, int(average * 1.2)),
+    }
+
+
+def capacity_hints():
+    """按分类汇总的容量参考（DR-12），给「发布 / 编辑活动」表单用。
+
+    只返回样本足够的分类（≥2 场活动）；样本不足的分类不出现——
+    与其给一个拍脑袋的数字，不如什么都不说。
+    """
+    categories = (
+        db.session.execute(db.select(Category).order_by(Category.sort_order))
+        .scalars()
+        .all()
+    )
+    hints = []
+    for category in categories:
+        advice = capacity_advice(category.id)
+        if advice:
+            hints.append({"category": category.name, **advice})
+    return hints
 
 
 def review_enrollment(activity_id, user_id, reviewer_id, approve):
@@ -741,6 +997,13 @@ def review_enrollment(activity_id, user_id, reviewer_id, approve):
         enrollment.status = EnrollStatus.REJECTED
         enrollment.reviewed_at = now
         enrollment.reviewed_by = reviewer_id
+        # DR-3：拒绝也是重要的状态变化，必须主动告知（附活动名与时间）
+        notify_user(
+            user_id,
+            f"审核未通过：{activity.title}",
+            f"你报名《{activity.title}》的申请未通过。"
+            f"审核时间：{now:%Y-%m-%d %H:%M}（UTC）。如仍想参加，可关注后续场次。",
+        )
         db.session.commit()
         return True, "已拒绝该申请。"
 
@@ -751,14 +1014,25 @@ def review_enrollment(activity_id, user_id, reviewer_id, approve):
     ).rowcount == 1:
         enrollment.status = EnrollStatus.CONFIRMED
         message = "已通过，该学生转为正式。"
+        notice = f"你报名《{activity.title}》的申请已通过，并已获得正式名额。"
     else:
         enrollment.status = EnrollStatus.WAITLISTED
         enrollment.waitlisted_at = now  # 队列按「通过时刻」排序（TC-8）
         db.session.flush()
-        message = f"已通过，但当前没有余位，该学生排在第 {waitlist_position(enrollment)} 位候补。"
+        position = waitlist_position(enrollment)
+        message = f"已通过，但当前没有余位，该学生排在第 {position} 位候补。"
+        notice = (
+            f"你报名《{activity.title}》的申请已通过，但当前没有余位，"
+            f"你排在第 {position} 位候补。有名额空出时会自动通知你。"
+        )
 
     enrollment.reviewed_at = now
     enrollment.reviewed_by = reviewer_id
+    notify_user(
+        user_id,
+        f"审核通过：{activity.title}",
+        f"{notice}审核时间：{now:%Y-%m-%d %H:%M}（UTC）。",
+    )
     db.session.commit()
     return True, message
 
@@ -841,9 +1115,9 @@ def cancel_enrollment(activity_id, user_id):
         .values(
             status=EnrollStatus.CANCELED,
             canceled_at=now,
-            # 退出候补后把 waitlisted_at 清掉：这条记录已经不在队列里，
-            # 保留着只会让"曾经排过队"和"现在在排队"看起来一样。
-            waitlisted_at=None,
+            # V3.0 起**不再清空 waitlisted_at**：它记录「曾经进过候补」的历史，
+            # 是 DR-4 转正率统计的分母；清掉就永远算不准。
+            # 候补队列查询只看 status=WAITLISTED，不会把它误当成还在排队。
         )
     )
     if result.rowcount != 1:
